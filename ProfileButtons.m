@@ -72,6 +72,16 @@ static BOOL PBUseSafariViewController(void) {
     return v ? [v boolValue] : YES;
 }
 
+// 按钮行放在「编辑主页」行的上方（默认）还是下方。
+// 下放在某些账号上会被 IG 自己的按钮（专业账户 / 推广 / 分享等）盖住，所以默认 above。
+static BOOL PBPositionAbove(void) {
+    NSString *pos = PBConfig()[@"Position"];
+    if ([pos isKindOfClass:[NSString class]]) {
+        return !([pos caseInsensitiveCompare:@"below"] == NSOrderedSame);
+    }
+    return YES;
+}
+
 // ---------------------------------------------------------------------------
 // MARK: - 通用：找 VC / 找视图 / 打印层级
 // ---------------------------------------------------------------------------
@@ -407,8 +417,10 @@ static NSInteger PBArrangedIndexForView(UIStackView *stack, UIView *target) {
     return NSNotFound;
 }
 
-// 方案 A：插进「竖直 UIStackView」里，紧跟按钮行之后 —— 最干净，IG 自己会把下面的内容推开
+// 方案 A：插进「竖直 UIStackView」里，紧贴按钮行上方（或下方）
+// —— 最干净，IG 自己会把其他内容推开
 static BOOL PBInsertIntoVerticalStack(UIView *anchor, UIView *row) {
+    BOOL above = PBPositionAbove();
     UIView *cur = anchor;
     for (int depth = 0; depth < 10 && cur; depth++, cur = cur.superview) {
         if (![cur isKindOfClass:[UIStackView class]]) continue;
@@ -416,60 +428,109 @@ static BOOL PBInsertIntoVerticalStack(UIView *anchor, UIView *row) {
         if (stack.axis != UILayoutConstraintAxisVertical) continue;
         NSInteger idx = PBArrangedIndexForView(stack, anchor);
         if (idx != NSNotFound) {
-            [stack insertArrangedSubview:row atIndex:(NSUInteger)(idx + 1)];
-            PB_LOG(@"inserted into vertical stack %@ at index %ld",
-                   NSStringFromClass([stack class]), (long)(idx + 1));
+            NSUInteger insertAt = above ? (NSUInteger)idx : (NSUInteger)(idx + 1);
+            [stack insertArrangedSubview:row atIndex:insertAt];
+            PB_LOG(@"inserted into vertical stack %@ at index %lu (%@)",
+                   NSStringFromClass([stack class]), (unsigned long)insertAt,
+                   above ? @"above" : @"below");
             return YES;
         }
     }
     return NO;
 }
 
-// 方案 B：用 Auto Layout 挂到按钮行容器的下方，并尝试把容器高度约束撑大
-static BOOL PBInsertBelowContainer(UIView *anchor, UIView *row) {
+// 在所有祖先前置约束里调整 view 的某个属性（用来给上方腾出空间）
+static BOOL PBAdjustConstraint(UIView *view, NSLayoutAttribute attr, CGFloat delta) {
+    NSMutableArray<UIView *> *candidates = [NSMutableArray arrayWithObject:view];
+    UIView *a = view.superview;
+    for (int depth = 0; depth < 8 && a; depth++, a = a.superview) {
+        [candidates addObject:a];
+    }
+    for (UIView *owner in candidates) {
+        for (NSLayoutConstraint *c in owner.constraints) {
+            if (c.relation != NSLayoutRelationEqual) continue;
+            if (c.firstAttribute != attr) continue;
+            if (c.firstItem != view) continue;
+            c.constant += delta;
+            return YES;
+        }
+    }
+    return NO;
+}
+
+// 方案 B：用 Auto Layout 挂到按钮行容器的上方（或下方）。
+// above 模式下还会把按钮行整体下移 44pt、并把父视图高度撑大，避免压住上面的简介/统计。
+static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
     UIView *rowContainer = anchor.superview;          // 装按钮的那一层
     UIView *parent = rowContainer.superview;          // header 内容视图
     if (!rowContainer || !parent) return NO;
 
     const CGFloat spacing = 8.0;
     const CGFloat height  = 36.0;
+    const CGFloat delta   = height + spacing;
+    BOOL above = PBPositionAbove();
 
     [parent addSubview:row];
-    [NSLayoutConstraint activateConstraints:@[
-        [row.leadingAnchor constraintEqualToAnchor:rowContainer.leadingAnchor],
-        [row.trailingAnchor constraintEqualToAnchor:rowContainer.trailingAnchor],
-        [row.topAnchor constraintEqualToAnchor:rowContainer.bottomAnchor constant:spacing],
-    ]];
+    if (above) {
+        [NSLayoutConstraint activateConstraints:@[
+            [row.leadingAnchor constraintEqualToAnchor:rowContainer.leadingAnchor],
+            [row.trailingAnchor constraintEqualToAnchor:rowContainer.trailingAnchor],
+            [row.bottomAnchor constraintEqualToAnchor:rowContainer.topAnchor constant:-spacing],
+        ]];
+    } else {
+        [NSLayoutConstraint activateConstraints:@[
+            [row.leadingAnchor constraintEqualToAnchor:rowContainer.leadingAnchor],
+            [row.trailingAnchor constraintEqualToAnchor:rowContainer.trailingAnchor],
+            [row.topAnchor constraintEqualToAnchor:rowContainer.bottomAnchor constant:spacing],
+        ]];
+    }
 
-    BOOL grew = NO;
+    BOOL shifted = NO, grew = NO;
+    if (above) {
+        // 把按钮行以及它下面的内容整体推下去，腾出 44pt
+        shifted = PBAdjustConstraint(rowContainer, NSLayoutAttributeTop, delta);
+    }
+    // 撑大父视图，否则新加的空间会被裁掉
     for (NSLayoutConstraint *c in parent.constraints) {
         if (c.firstItem == parent &&
             c.firstAttribute == NSLayoutAttributeHeight &&
             c.relation == NSLayoutRelationEqual) {
-            c.constant += (height + spacing);
+            c.constant += delta;
             grew = YES;
             break;
         }
     }
     [parent setNeedsLayout];
-    PB_LOG(@"attached below %@ in %@ (grewHeight=%d)",
-           NSStringFromClass([rowContainer class]), NSStringFromClass([parent class]), grew);
 
-    if (!grew && PBDebug()) {
-        PBDumpAncestors(anchor, "below-container");
+    PB_LOG(@"attached %@ %@ in %@ (shifted=%d grewHeight=%d)",
+           above ? @"above" : @"below", NSStringFromClass([rowContainer class]),
+           NSStringFromClass([parent class]), shifted, grew);
+
+    if (PBDebug() && (!grew || (above && !shifted))) {
+        PBDumpAncestors(anchor, "relative-container");
     }
     return YES;
 }
 
-// 方案 C（兜底）：主页底部悬浮一条，保证一定能看到
+// 方案 C（兜底）：贴在主页顶部（安全区下方）或底部，保证一定能看到
 static void PBDockToViewController(UIViewController *vc, UIView *row) {
+    BOOL above = PBPositionAbove();
     [vc.view addSubview:row];
-    [NSLayoutConstraint activateConstraints:@[
-        [row.leadingAnchor constraintEqualToAnchor:vc.view.leadingAnchor constant:16.0],
-        [row.trailingAnchor constraintEqualToAnchor:vc.view.trailingAnchor constant:-16.0],
-        [row.bottomAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor constant:-10.0],
-    ]];
-    PB_LOG(@"docked fallback row to %@", NSStringFromClass([vc class]));
+    if (above) {
+        [NSLayoutConstraint activateConstraints:@[
+            [row.leadingAnchor constraintEqualToAnchor:vc.view.leadingAnchor constant:16.0],
+            [row.trailingAnchor constraintEqualToAnchor:vc.view.trailingAnchor constant:-16.0],
+            [row.topAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor constant:8.0],
+        ]];
+    } else {
+        [NSLayoutConstraint activateConstraints:@[
+            [row.leadingAnchor constraintEqualToAnchor:vc.view.leadingAnchor constant:16.0],
+            [row.trailingAnchor constraintEqualToAnchor:vc.view.trailingAnchor constant:-16.0],
+            [row.bottomAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor constant:-10.0],
+        ]];
+    }
+    PB_LOG(@"docked fallback row (%@) to %@", above ? @"top" : @"bottom",
+           NSStringFromClass([vc class]));
 }
 
 // ---------------------------------------------------------------------------
@@ -513,12 +574,14 @@ static void PBInstallForViewController(UIViewController *vc) {
 
     UIView *row = PBMakeRow();
     BOOL ok = PBInsertIntoVerticalStack(anchor, row);
-    if (!ok) ok = PBInsertBelowContainer(anchor, row);
+    if (!ok) ok = PBInsertRelativeToContainer(anchor, row);
     if (!ok) PBDockToViewController(vc, row);
 
     objc_setAssociatedObject(vc, &kPBInstalledRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    PB_LOG(@"installed %lu button(s) (%@)",
-           (unsigned long)PBButtonConfigs().count, ok ? @"in header" : @"docked");
+    PB_LOG(@"installed %lu button(s) %@ edit-profile row (%@)",
+           (unsigned long)PBButtonConfigs().count,
+           PBPositionAbove() ? @"above" : @"below",
+           ok ? @"in header" : @"docked");
 }
 
 // ---------------------------------------------------------------------------

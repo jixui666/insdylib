@@ -1,7 +1,8 @@
-# ProfileButtons —— 在 Instagram 个人主页「编辑主页 / 分析」下面加自定义按钮
+# ProfileButtons —— 在 Instagram 个人主页「编辑主页 / 分析」上面加自定义按钮
 
 在 `Payload/Instagram.app`（Instagram **451.0.0**，RyukGram 改装包）的个人主页上，
-在「编辑主页 / 分析」这一行按钮的下面插入 N 个自定义按钮，点击后在**应用内浏览器**里打开网页
+在「编辑主页 / 分析」这一行按钮的**上面**插入 N 个自定义按钮（默认 `Position = above`，
+可配置成下面），点击后在**应用内浏览器**里打开网页
 （默认 `SFSafariViewController`，可切换成自绘 `WKWebView`）。
 
 > 结论先说：**改 IPA 里的资源文件做不到这件事，必须再写一个注入式 tweak（dylib）。**
@@ -77,11 +78,14 @@ ProfileButtonsTweak/
         <key>Icon</key><string>person.2.fill</string>
     </dict>
 </array>
+<key>Position</key><string>above</string>   <!-- above：放在「编辑主页」上面（默认）；below：放下面 -->
 <key>UseSafariViewController</key><true/>
 <key>Debug</key><true/>
 ```
 
 - 条数随意，2 条、3 条、5 条都行（自动均分宽度）。
+- 默认 **`Position = above`**：按钮在「编辑主页 / 分析」这一行的**上面**。
+  之前放下面会被 IG 自己的按钮（专业账户 / 推广 / 分享等）压住，所以默认改成上面了。
 - `http/https` 走应用内浏览器；`tg://`、`instagram://`、`mailto:` 这类交给系统。
 - 不提供配置文件也能跑，会用代码里 `PBDefaultButtons()` 的三条占位链接。
 - 只有**自己的主页**会出现这三个按钮：代码是靠「能不能找到『编辑主页』按钮」来判断的，
@@ -155,16 +159,19 @@ Sideloadly 的特色之一就是 **Tweak Injection**（支持 `.dylib / .deb / .
 
 | 策略 | 做法 | 效果 |
 | --- | --- | --- |
-| **A. 竖直 StackView** | 找到包住按钮行的「竖直 `UIStackView`」，把按钮行 `insertArrangedSubview:` 到它后面 | 最理想，IG 自己会把下面的简介/精选往下推 |
-| **B. Auto Layout** | 挂到按钮行容器下方（`top = 容器.bottom + 8`），并尝试把容器的高度约束撑大 | 多数情况下可用；若父视图是手写 frame 布局，可能会盖住简介 |
-| **C. 悬浮兜底** | 贴在主页底部安全区上方 36pt | 一定能看见，但样式是「悬浮条」 |
+| **A. 竖直 StackView** | 找到包住按钮行的「竖直 `UIStackView`」，把自绘行 `insertArrangedSubview:` 到按钮行**之前** | 最理想，IG 自己会把简介/精选整体往下推 |
+| **B. Auto Layout** | 挂到按钮行容器上方（`bottom = 容器.top - 8`），同时把按钮行下移 44pt 并撑大父视图高度 | 多数情况下可用；父视图若是纯手写 frame 布局，可能压到简介（日志 `shifted/grewHeight` 会写 0） |
+| **C. 悬浮兜底** | 贴在安全区顶部（`Position = above` 时）/ 底部 | 一定能看见，但样式是「悬浮条」 |
 
 真机上只用其中一种，日志会写清楚用了哪种：
-`installed 3 button(s) (in header)` 还是 `(docked)`。
+`installed 3 button(s) above edit-profile row (in header)` 或 `(docked)`。
 
 **如果 A 生效但被裁掉 / 位置压住了简介**：说明父容器是手写 frame 布局，勾选 `Debug`，
-用日志里的祖先链找到承载 header 的内容视图类名，然后在 `PBInsertBelowContainer()` 里
-把它自己的高度也一起加上去（`c.constant += 44` 已有一份，可按需改成作用于更上层）。
+用日志里的祖先链找到承载 header 的内容视图类名，然后在 `PBInsertRelativeToContainer()` 里
+把下移/撑高改到更上层（`PBAdjustConstraint` 的搜索深度目前是 8 层）。
+
+> 之前默认是放**下面**，但部分账号下面还有「专业账户 / 推广 / 分享」等按钮，会把自己的行盖住；
+> 现在默认 `Position = above`，想放下面把配置改成 `below` 即可。
 
 **如果连按钮都没找到**（日志 `edit-profile button not found`）：
 1. 把 `Debug` 设为 `true`，会 dump 前 6 层视图树；

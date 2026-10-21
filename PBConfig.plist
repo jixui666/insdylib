@@ -38,6 +38,11 @@
         </dict>
     </array>
 
+    <!-- above：放在「编辑主页」这一行上面（默认，避免被 IG 自己的按钮盖住）
+         below：放在下面 -->
+    <key>Position</key>
+    <string>above</string>
+
     <!-- true：用系统 SFSafariViewController（最稳）；false：用自绘 WKWebView -->
     <key>UseSafariViewController</key>
     <true/>
