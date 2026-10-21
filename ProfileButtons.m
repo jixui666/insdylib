@@ -102,30 +102,51 @@ static NSArray<NSDictionary *> *PBDefaultButtonsResolved(void);
 static NSArray<NSDictionary *> *PBButtonConfigs(void);
 
 // 找不到 accessibilityIdentifier 时的兜底文字匹配（覆盖 IG 支持的常见语言）
-static NSArray<NSString *> *PBEditTitles(void) {
+// 每项是 @[语言码, 「编辑主页」在该语言下的文字]，用于两件事：
+//   1) 找到个人主页上的编辑按钮；
+//   2) 反过来从按钮文字推断 IG 当前界面语言（IG 用内建语言设置，不改 NSLocale）。
+static NSArray<NSArray<NSString *> *> *PBEditTitleTable(void) {
     return @[
-        @"编辑主页", @"編輯主頁", @"编辑个人主页", @"編輯個人主頁",
-        @"Edit profile", @"Edit Profile", @"Modifier le profil",
-        @"Editar perfil", @"プロフィールを編集", @"프로필 편집",
-        @"Profil bearbeiten", @"Modifica profilo",
-        @"Редактировать профиль", @"تعديل الملف الشخصي", @"Profili düzenle",
-        @"Edit Profil", @"แก้ไขโปรไฟล์", @"Chỉnh sửa trang cá nhân",
-        @"प्रोफ़ाइल संपादित करें", @"Редагувати профіль", @"Edytuj profil",
-        @"Profiel bewerken", @"Editează profilul", @"Profil szerkesztése",
-        @"Upravit profil", @"Επεξεργασία προφίλ", @"Redigera profil",
-        @"Rediger profil", @"Muokkaa profiilia", @"Rediger profil",
-        @"সংশোধন প্রোফাইল", @"প্রোফাইল সম্পাদনা করুন", @"ப்ரொஃபைலைத் திருத்து",
-        @"ప్రొఫైల్ను సవరించండి", @"पार्श्वचित्र संपादित करा", @"સંપાદિત પ્રોફાઇલ",
-        @"ಪ್ರೊಫೈಲ್ ಸಂಪಾದಿಸಿ", @"പ്രൊഫൈൽ എഡിറ്റ് ചെയ്യുക", @"ਪ੍ਰੋਫ਼ਾਈਲ ਸੋਧੋ",
-        @"پروفائل میں ترمیم کریں", @"ویرایش پروفایل", @"עריכת הפרופיל",
-        @"Profili redaktə et", @"Профильді өңдеу", @"Profilni tahrirlash",
-        @"პროფილის რედაქტირება", @"Խմբագրել պրոֆիլը", @"Уреди профил",
-        @"Uredi profil", @"Uredi profil", @"Upraviť profil", @"Редактиране на профила",
-        @"Redaguoti profilį", @"Rediģēt profilu", @"Muuda profiili",
-        @"កែសម្រួលប្រវត្តិរូប", @"ແກ້ໄຂໂປຣໄຟລ໌", @"ပရိုဖိုင်ကို တည်းဖြတ်ရန်",
-        @"පැතිකඩ සංස්කරණය කරන්න", @"प्रोफाइल सम्पादन गर्नुहोस्", @"Hariri wasifu",
-        @"I-edit ang profile", @"Edytuj profil",
+        @[@"zh-Hans", @"编辑主页"], @[@"zh-Hant", @"編輯主頁"],
+        @[@"zh-Hans", @"编辑个人主页"], @[@"zh-Hant", @"編輯個人主頁"],
+        @[@"en", @"Edit profile"], @[@"en", @"Edit Profile"],
+        @[@"fr", @"Modifier le profil"], @[@"es", @"Editar perfil"],
+        @[@"ja", @"プロフィールを編集"], @[@"ko", @"프로필 편집"],
+        @[@"de", @"Profil bearbeiten"], @[@"it", @"Modifica profilo"],
+        @[@"ru", @"Редактировать профиль"], @[@"ar", @"تعديل الملف الشخصي"],
+        @[@"tr", @"Profili düzenle"], @[@"id", @"Edit Profil"],
+        @[@"th", @"แก้ไขโปรไฟล์"], @[@"vi", @"Chỉnh sửa trang cá nhân"],
+        @[@"hi", @"प्रोफ़ाइल संपादित करें"], @[@"uk", @"Редагувати профіль"],
+        @[@"pl", @"Edytuj profil"], @[@"nl", @"Profiel bewerken"],
+        @[@"ro", @"Editează profilul"], @[@"hu", @"Profil szerkesztése"],
+        @[@"cs", @"Upravit profil"], @[@"el", @"Επεξεργασία προφίλ"],
+        @[@"sv", @"Redigera profil"], @[@"da", @"Rediger profil"],
+        @[@"fi", @"Muokkaa profiilia"], @[@"no", @"Rediger profil"],
+        @[@"bn", @"প্রোফাইল সম্পাদনা করুন"], @[@"ta", @"ப்ரொஃபைலைத் திருத்து"],
+        @[@"te", @"ప్రొఫైల్ను సవరించండి"], @[@"mr", @"पार्श्वचित्र संपादित करा"],
+        @[@"gu", @"સંપાદિત પ્રોફાઇલ"], @[@"kn", @"ಪ್ರೊಫೈಲ್ ಸಂಪಾದಿಸಿ"],
+        @[@"ml", @"പ്രൊഫൈൽ എഡിറ്റ് ചെയ്യുക"], @[@"pa", @"ਪ੍ਰੋਫ਼ਾਈਲ ਸੋਧੋ"],
+        @[@"ur", @"پروفائل میں ترمیم کریں"], @[@"fa", @"ویرایش پروفایل"],
+        @[@"he", @"עריכת הפרופיל"], @[@"az", @"Profili redaktə et"],
+        @[@"kk", @"Профильді өңдеу"], @[@"uz", @"Profilni tahrirlash"],
+        @[@"ka", @"პროფილის რედაქტირება"], @[@"hy", @"Խմբագրել պրոֆիլը"],
+        @[@"sr", @"Уреди профил"], @[@"hr", @"Uredi profil"],
+        @[@"sl", @"Uredi profil"], @[@"sk", @"Upraviť profil"],
+        @[@"bg", @"Редактиране на профила"], @[@"lt", @"Redaguoti profilį"],
+        @[@"lv", @"Rediģēt profilu"], @[@"et", @"Muuda profiili"],
+        @[@"km", @"កែសម្រួលប្រវត្តិរូប"], @[@"lo", @"ແກ້ໄຂໂປຣໄຟລ໌"],
+        @[@"my", @"ပရိုဖိုင်ကို တည်းဖြတ်ရန်"], @[@"si", @"පැතිකඩ සංස්කරණය කරන්න"],
+        @[@"ne", @"प्रोफाइल सम्पादन गर्नुहोस्"], @[@"sw", @"Hariri wasifu"],
+        @[@"fil", @"I-edit ang profile"],
     ];
+}
+
+static NSArray<NSString *> *PBEditTitles(void) {
+    NSMutableArray<NSString *> *titles = [NSMutableArray array];
+    for (NSArray<NSString *> *pair in PBEditTitleTable()) {
+        [titles addObject:pair.lastObject];
+    }
+    return titles;
 }
 
 // 内置默认按钮：店铺中心 / 商品橱窗 / 订单详情（多语言标题）
@@ -203,8 +224,7 @@ static NSArray<NSDictionary *> *PBDefaultButtons(void) {
 }
 
 // 把系统语言规范成我们用的短码：zh-Hans / zh-Hant / en / ja …
-static NSString *PBNormalizeLanguage(NSString *raw) {
-    if (![raw isKindOfClass:[NSString class]] || raw.length == 0) return @"en";
+static NSString *PBNormalizeLanguage(NSString *raw) {    if (![raw isKindOfClass:[NSString class]] || raw.length == 0) return @"en";
     NSString *s = [raw stringByReplacingOccurrencesOfString:@"_" withString:@"-"];
     NSArray<NSString *> *parts = [s componentsSeparatedByString:@"-"];
     NSString *base = [parts.firstObject lowercaseString] ?: @"en";
@@ -222,7 +242,68 @@ static NSString *PBNormalizeLanguage(NSString *raw) {
     return base;
 }
 
+static NSString *gPBUILanguage;           // 从 IG 界面文字推断出来的语言
+static NSString *gPBIGDefaultsLanguage;   // 从 IG 自己的 defaults 读出来的语言
+static NSString *PBNormalizeLanguage(NSString *raw);
+static void PBRebuildVisibleRows(void);
+
+// 读 IG 自己的语言设置：IG 的「语言」选项不会改 NSLocale，
+// 只会写它自己的 defaults，所以必须优先读这里。
+static NSString *PBReadIGLanguageFromDefaults(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    for (NSString *key in @[@"current_language", @"current_locale", @"primary_locale",
+                            @"ig_language", @"app_language"]) {
+        id v = [defaults objectForKey:key];
+        if ([v isKindOfClass:[NSString class]] && [v length] > 0) {
+            PB_LOG(@"i18n: defaults[%@] = %@", key, v);
+            return PBNormalizeLanguage(v);
+        }
+    }
+    return nil;
+}
+
+// 从「编辑主页」实际显示的文字反推语言
+static NSString *PBEditTitleLanguage(NSString *text) {
+    if (![text isKindOfClass:[NSString class]] || text.length == 0) return nil;
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *lower = [trimmed lowercaseString];
+    if (lower.length < 3) return nil;
+
+    for (NSArray<NSString *> *pair in PBEditTitleTable()) {
+        if ([[pair.lastObject lowercaseString] isEqualToString:lower]) return pair.firstObject;
+    }
+    // 按钮文字可能带括号/后缀，退一步做包含匹配
+    for (NSArray<NSString *> *pair in PBEditTitleTable()) {
+        NSString *t = [pair.lastObject lowercaseString];
+        if (t.length >= 5 && [lower containsString:t]) return pair.firstObject;
+    }
+    return nil;
+}
+
+static void PBDetectLanguageFromText(NSString *text) {
+    NSString *lang = PBEditTitleLanguage(text);
+    if (lang.length == 0) return;
+    if ([lang isEqualToString:gPBUILanguage ?: @""]) return;
+
+    NSString *old = gPBUILanguage;
+    gPBUILanguage = [lang copy];
+    PB_LOG(@"i18n: UI language = %@ (was=%@, system=%@, defaults=%@)",
+           lang, old ?: @"-",
+           PBNormalizeLanguage([NSLocale preferredLanguages].firstObject),
+           gPBIGDefaultsLanguage ?: @"-");
+
+    if (old.length > 0) {
+        // 运行时切语言：把已装的按钮重建，让标题跟着变
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PBRebuildVisibleRows();
+        });
+    }
+}
+
 static NSString *PBCurrentLanguage(void) {
+    if (gPBUILanguage.length) return gPBUILanguage;
+    if (gPBIGDefaultsLanguage.length) return gPBIGDefaultsLanguage;
     NSArray<NSString *> *langs = [NSLocale preferredLanguages];
     return PBNormalizeLanguage(langs.firstObject);
 }
@@ -645,8 +726,11 @@ static UIView *PBFindEditProfileAnchor(UIView *root, BOOL allowActionBarFallback
             matched = YES;
             byIdentifier = YES;
         }
-        if (!matched && PBTextMatchesEditProfile(PBViewOwnText(v))) matched = YES;
+        NSString *ownText = PBViewOwnText(v);
+        if (!matched && PBTextMatchesEditProfile(ownText)) matched = YES;
         if (!matched && PBTextMatchesEditProfile(v.accessibilityLabel)) matched = YES;
+        // 用按钮上真实显示的文字推断 IG 当前界面语言（IG 内建语言不改 NSLocale）
+        if (matched) PBDetectLanguageFromText(ownText ?: v.accessibilityLabel);
 
         if (matched && !PBViewInsideChrome(v, root)) {
             UIView *anchor = PBTappableAncestor(v) ?: v;
@@ -703,6 +787,25 @@ static UIView *PBFindEditProfileAnchor(UIView *root, BOOL allowActionBarFallback
         if (bar) {
             best = bar;
             PB_LOG(@"anchor fallback: action bar %@", NSStringFromClass([bar class]));
+            // 从 action bar 里按钮的文字尽量推断语言
+            NSMutableArray<UIView *> *q3 = [NSMutableArray arrayWithObject:bar];
+            NSInteger v3 = 0;
+            while (q3.count > 0 && v3 < 300) {
+                UIView *sv = q3.firstObject;
+                [q3 removeObjectAtIndex:0];
+                v3++;
+                BOOL known = (PBEditTitleLanguage(PBViewOwnText(sv)) != nil ||
+                              PBEditTitleLanguage(sv.accessibilityLabel) != nil);
+                if (known) {
+                    PBDetectLanguageFromText(PBViewOwnText(sv) ?: sv.accessibilityLabel);
+                    break;
+                }
+                [q3 addObjectsFromArray:sv.subviews];
+            }
+            if (gPBUILanguage.length == 0 && gPBIGDefaultsLanguage.length == 0) {
+                PB_LOG(@"i18n: language unknown, falling back to system %@",
+                       PBNormalizeLanguage([NSLocale preferredLanguages].firstObject));
+            }
         }
     }
 
@@ -1427,9 +1530,28 @@ static NSString *PBDialogText(UIViewController *vc) {
             }
         }
     } @catch (NSException *e) {
-        PB_LOG(@"dialog text read caught: %@", e.reason);
+        // 有些 VC 不 KVC 兼容（例如 IGCustomAlertViewController），忽略即可
     }
     return text;
+}
+
+// 自定义弹窗（IGCustomAlertViewController 等）的文案只能从子视图里扫
+static void PBCollectViewTexts(UIView *view, NSMutableString *out, int depth) {
+    if (!view || depth > 6 || out.length > 600) return;
+    @try {
+        if ([view isKindOfClass:[UILabel class]]) {
+            NSString *t = [(UILabel *)view text];
+            if (t.length) [out appendString:t];
+        } else if ([view isKindOfClass:[UITextView class]]) {
+            NSString *t = [(UITextView *)view text];
+            if (t.length) [out appendString:t];
+        } else if ([view isKindOfClass:[UIButton class]]) {
+            NSString *t = [(UIButton *)view titleForState:UIControlStateNormal];
+            if (t.length) [out appendString:t];
+        }
+        for (UIView *sub in view.subviews) PBCollectViewTexts(sub, out, depth + 1);
+    } @catch (NSException *e) {
+    }
 }
 
 static BOOL PBTextLooksLikeBetaNag(NSString *text) {
@@ -1483,6 +1605,17 @@ static void PBPresent(id self, SEL _cmd, UIViewController *vc, BOOL animated, vo
     @try {
         if (vc && PBSuppressBetaNagEnabled() && PBViewLooksLikeDialog(vc)) {
             NSString *text = PBDialogText(vc);
+            if (text.length < 4) {
+                // 自定义弹窗（IGCustomAlertViewController / RyukGram 的更新提示）
+                // 文案不挂在 VC 属性上，只能加载视图后扫子视图里的文字
+                @try {
+                    [vc loadViewIfNeeded];
+                } @catch (NSException *ignored) {
+                }
+                NSMutableString *scanned = [NSMutableString string];
+                PBCollectViewTexts(vc.view, scanned, 0);
+                if (scanned.length) text = scanned;
+            }
             if (PBTextLooksLikeBetaNag(text) || PBTextLooksLikeRyukNag(text)) {
                 PB_LOG(@"suppressed nag: %@ | %@", NSStringFromClass([vc class]), text);
                 if (completion) completion();
@@ -1952,6 +2085,12 @@ static void PBInstallForViewController(UIViewController *vc) {
         if (PBDebug()) PB_LOG(@"skip: not self profile (%@)", NSStringFromClass([vc class]));
         return;
     }
+    // IG 可能在启动后才写入自己的语言设置，这里再读一次
+    NSString *igLang = PBReadIGLanguageFromDefaults();
+    if (igLang.length && ![igLang isEqualToString:gPBIGDefaultsLanguage ?: @""]) {
+        gPBIGDefaultsLanguage = igLang;
+        if (PBDebug()) PB_LOG(@"i18n: defaults language -> %@", igLang);
+    }
     UIView *anchor = PBFindEditProfileAnchor(vc.view, selfState != 0);
     if (!anchor) {
         NSUInteger count = fails.unsignedIntegerValue + 1;
@@ -2120,10 +2259,16 @@ __attribute__((constructor)) static void PBInit(void) {
 
         BOOL stringPatched = PBInstallStringCrashPatch();
         BOOL nagFilter = PBInstallBetaNagFilter();
+        gPBIGDefaultsLanguage = PBReadIGLanguageFromDefaults();
         PBApplyRyukDefaults();
+        // RyukGram 的设置在它自己的初始化里读，晚一点再写一遍，确保覆盖
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            PBApplyRyukDefaults();
+        });
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d, nagFilter=%d)",
-               @"2025-10-21-r17",
+               @"2025-10-21-r18",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
