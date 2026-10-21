@@ -88,7 +88,7 @@ static BOOL PBForceDock(void) {
     return v ? [v boolValue] : NO;
 }
 
-static BOOL PBShowLaunchToast(void) {
+static BOOL PBShouldShowLaunchToast(void) {
     id v = PBConfig()[@"ShowLaunchToast"];
     if (v) return [v boolValue];
     return PBDebug();
@@ -787,6 +787,6 @@ __attribute__((constructor)) static void PBInit(void) {
         if (PBDebug()) PBLogProfileClasses();
 
         PBStartWatchdog();
-        if (PBShowLaunchToast()) PBShowLaunchToast();
+        if (PBShouldShowLaunchToast()) PBShowLaunchToast();
     }
 }
