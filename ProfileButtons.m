@@ -1206,7 +1206,19 @@ static void PBInstallForViewController(UIViewController *vc) {
 
 typedef void (*PBViewDidAppearIMP)(id, SEL, BOOL);
 typedef void (*PBViewWillAppearIMP)(id, SEL, BOOL);
+static PBViewDidAppearIMP PBOrigViewDidAppear;
 static PBViewWillAppearIMP PBOrigViewWillAppear;
+
+static void PBViewDidAppear(id self, SEL _cmd, BOOL animated) {
+    if (PBOrigViewDidAppear) PBOrigViewDidAppear(self, _cmd, animated);
+    UIViewController *vc = (UIViewController *)self;
+    if (PBDebug()) PB_LOG(@"appeared: %@", NSStringFromClass([vc class]));
+    if (PBIsProfileViewController(vc)) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PBInstallForViewController(vc);
+        });
+    }
+}
 
 static void PBViewWillAppear(id self, SEL _cmd, BOOL animated) {
     if (PBOrigViewWillAppear) PBOrigViewWillAppear(self, _cmd, animated);
