@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      把本文件改名为 PBConfig.plist，放进 Payload/Instagram.app/ 里
+      （和 Instagram 可执行文件同级）。不放也行，会用代码里的默认三条。
+
+      Title      按钮文字
+      URL        http/https 会走应用内浏览器；其它 scheme（tg:// instagram:// mailto:）交给系统
+      Icon       SF Symbols 名称，可删掉
+    -->
+    <key>Buttons</key>
+    <array>
+        <dict>
+            <key>Title</key>
+            <string>官网</string>
+            <key>URL</key>
+            <string>https://example.com</string>
+            <key>Icon</key>
+            <string>globe</string>
+        </dict>
+        <dict>
+            <key>Title</key>
+            <string>客服</string>
+            <key>URL</key>
+            <string>https://example.com/support</string>
+            <key>Icon</key>
+            <string>bubble.left</string>
+        </dict>
+        <dict>
+            <key>Title</key>
+            <string>社群</string>
+            <key>URL</key>
+            <string>https://example.com/group</string>
+            <key>Icon</key>
+            <string>person.2.fill</string>
+        </dict>
+    </array>
+
+    <!-- true：用系统 SFSafariViewController（最稳）；false：用自绘 WKWebView -->
+    <key>UseSafariViewController</key>
+    <true/>
+
+    <!-- 首次适配时打开，日志里会打印按钮祖先链，方便改插入位置 -->
+    <key>Debug</key>
+    <true/>
+</dict>
+</plist>

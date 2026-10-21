@@ -1,0 +1,9 @@
+Package: com.example.profilebuttons
+Name: ProfileButtons
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Adds custom buttons under the Instagram profile action row, opening pages in an in-app browser.
+Maintainer: you
+Author: you
+Section: Tweaks
+Depends: mobilesubstrate

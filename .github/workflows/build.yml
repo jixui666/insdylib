@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          key: ${{ runner.os }}-theos-${{ hashFiles('Makefile', 'control') }}
+
+      - name: Prepare Theos
+        uses: Randomblock1/theos-action@v1
+
+      - name: Build
+        run: make package FINALPACKAGE=1
+
+      - name: Collect dylib + deb
+        run: |
+          mkdir -p out
+          cp -v packages/*.deb out/ 2>/dev/null || true
+          find .theos -name 'ProfileButtons.dylib' -print -exec cp -v {} out/ \;
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProfileButtons
+          path: out/
