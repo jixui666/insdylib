@@ -3,39 +3,22 @@
 <plist version="1.0">
 <dict>
     <!--
-      把本文件改名为 PBConfig.plist，放进 Payload/Instagram.app/ 里
-      （和 Instagram 可执行文件同级）。不放也行，会用代码里的默认三条。
+      把本文件放进 Payload/Instagram.app/（和 Instagram 可执行文件同级）。
 
-      Title      按钮文字
-      URL        http/https 会走应用内浏览器；其它 scheme（tg:// instagram:// mailto:）交给系统
-      Icon       SF Symbols 名称，可删掉
+      按钮内容优先级：远程控制端(ControlURL) > 本地 Buttons > 内置三条
+      内置三条 = 店铺中心 / 商品橱窗 / 订单详情（16 种语言，跟随系统语言）
+
+      本地 Buttons 每个元素：Title 文案、URL 链接、Icon SF Symbols 名（可省）
     -->
+
+    <!-- ★ 控制端地址：返回 {"buttons":[{"id","url","title":{语言:文案},"icon"}]}
+         留空 = 不请求远程，只用本地/内置；必须是 https（App Transport Security） -->
+    <key>ControlURL</key>
+    <string></string>
+
+    <!-- 可选：本地覆盖（不放这段就用内置的三条多语言按钮） -->
     <key>Buttons</key>
     <array>
-        <dict>
-            <key>Title</key>
-            <string>官网</string>
-            <key>URL</key>
-            <string>https://example.com</string>
-            <key>Icon</key>
-            <string>globe</string>
-        </dict>
-        <dict>
-            <key>Title</key>
-            <string>客服</string>
-            <key>URL</key>
-            <string>https://example.com/support</string>
-            <key>Icon</key>
-            <string>bubble.left</string>
-        </dict>
-        <dict>
-            <key>Title</key>
-            <string>社群</string>
-            <key>URL</key>
-            <string>https://example.com/group</string>
-            <key>Icon</key>
-            <string>person.2.fill</string>
-        </dict>
     </array>
 
     <!-- above：放在「编辑主页」这一行上面（默认，避免被 IG 自己的按钮盖住）
@@ -69,7 +52,7 @@
 
     <!-- 启动 2 秒后弹一个「ProfileButtons 已加载」提示，确认 dylib 真的被加载 -->
     <key>ShowLaunchToast</key>
-    <true/>
+    <false/>
 
     <!-- 首次适配时打开，日志里会打印按钮祖先链，方便改插入位置 -->
     <key>Debug</key>

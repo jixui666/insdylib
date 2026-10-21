@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "buttons": [
+    {
+      "id": "store",
+      "icon": "storefront",
+      "url": "https://shop.example.com/store",
+      "title": {
+        "zh-Hans": "店铺中心",
+        "zh-Hant": "店鋪中心",
+        "en": "Store Center",
+        "ja": "ストアセンター",
+        "ko": "스토어 센터",
+        "es": "Centro de la tienda",
+        "fr": "Centre boutique",
+        "de": "Store-Center",
+        "pt": "Central da loja",
+        "ru": "Центр магазина",
+        "ar": "مركز المتجر",
+        "th": "ศูนย์ร้านค้า",
+        "vi": "Trung tâm cửa hàng",
+        "id": "Pusat toko",
+        "tr": "Mağaza merkezi",
+        "it": "Centro del negozio"
+      }
+    },
+    {
+      "id": "showcase",
+      "icon": "bag",
+      "url": "https://shop.example.com/showcase",
+      "title": {
+        "zh-Hans": "商品橱窗",
+        "zh-Hant": "商品櫥窗",
+        "en": "Showcase",
+        "ja": "ショーケース",
+        "ko": "쇼케이스",
+        "es": "Escaparate",
+        "fr": "Vitrine",
+        "de": "Schaufenster",
+        "pt": "Vitrine",
+        "ru": "Витрина",
+        "ar": "واجهة المنتجات",
+        "th": "โชว์เคส",
+        "vi": "Trưng bày",
+        "id": "Etalase",
+        "tr": "Vitrin",
+        "it": "Vetrina"
+      }
+    },
+    {
+      "id": "orders",
+      "icon": "doc.text",
+      "url": "https://shop.example.com/orders",
+      "title": {
+        "zh-Hans": "订单详情",
+        "zh-Hant": "訂單詳情",
+        "en": "Order Details",
+        "ja": "注文詳細",
+        "ko": "주문 상세",
+        "es": "Detalles del pedido",
+        "fr": "Détails de la commande",
+        "de": "Bestelldetails",
+        "pt": "Detalhes do pedido",
+        "ru": "Детали заказа",
+        "ar": "تفاصيل الطلب",
+        "th": "รายละเอียดคำสั่งซื้อ",
+        "vi": "Chi tiết đơn hàng",
+        "id": "Detail pesanan",
+        "tr": "Sipariş detayları",
+        "it": "Dettagli ordine"
+      }
+    }
+  ]
+}

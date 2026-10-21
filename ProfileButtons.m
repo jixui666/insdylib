@@ -89,6 +89,17 @@ static NSString *const PBConfigName   = @"PBConfig";       // App 包内 PBConfi
 static const NSInteger PBRowTag       = 0x5042;            // 'PB'
 
 static const char kPBTrackerKey;
+static const char kPBInstalledRowKey;
+static const char kPBLastAttemptKey;
+static const char kPBFailCountKey;
+static const char kPBFirstAttemptKey;
+static const char kPBNativeInstalledKey;
+
+// 前置声明（这几个函数互相引用）
+static NSDictionary *PBConfig(void);
+static NSArray<NSDictionary *> *PBRemoteButtons(void);
+static NSArray<NSDictionary *> *PBDefaultButtonsResolved(void);
+static NSArray<NSDictionary *> *PBButtonConfigs(void);
 
 // 找不到 accessibilityIdentifier 时的兜底文字匹配（多语言）
 static NSArray<NSString *> *PBEditTitles(void) {
@@ -100,13 +111,259 @@ static NSArray<NSString *> *PBEditTitles(void) {
     ];
 }
 
-// PBConfig.plist 缺省值（用户不提供配置文件时用这三条）
+// 内置默认按钮：店铺中心 / 商品橱窗 / 订单详情（多语言标题）
+// 远程控制端（ControlURL）返回配置时，标题/链接/图标都以远程为准。
 static NSArray<NSDictionary *> *PBDefaultButtons(void) {
     return @[
-        @{ @"Title": @"官网", @"URL": @"https://example.com",        @"Icon": @"globe" },
-        @{ @"Title": @"客服", @"URL": @"https://example.com/support", @"Icon": @"bubble.left" },
-        @{ @"Title": @"社群", @"URL": @"https://example.com/group",   @"Icon": @"person.2.fill" },
+        @{ @"id": @"store",
+           @"Icon": @"storefront",
+           @"URL": @"https://example.com/store",
+           @"Titles": @{
+               @"zh-Hans": @"店铺中心", @"zh-Hant": @"店鋪中心", @"en": @"Store Center",
+               @"ja": @"ストアセンター", @"ko": @"스토어 센터", @"es": @"Centro de la tienda",
+               @"fr": @"Centre boutique", @"de": @"Store-Center", @"pt": @"Central da loja",
+               @"ru": @"Центр магазина", @"ar": @"مركز المتجر", @"th": @"ศูนย์ร้านค้า",
+               @"vi": @"Trung tâm cửa hàng", @"id": @"Pusat toko", @"tr": @"Mağaza merkezi",
+               @"it": @"Centro del negozio",
+           } },
+        @{ @"id": @"showcase",
+           @"Icon": @"bag",
+           @"URL": @"https://example.com/showcase",
+           @"Titles": @{
+               @"zh-Hans": @"商品橱窗", @"zh-Hant": @"商品櫥窗", @"en": @"Showcase",
+               @"ja": @"ショーケース", @"ko": @"쇼케이스", @"es": @"Escaparate",
+               @"fr": @"Vitrine", @"de": @"Schaufenster", @"pt": @"Vitrine",
+               @"ru": @"Витрина", @"ar": @"واجهة المنتجات", @"th": @"โชว์เคส",
+               @"vi": @"Trưng bày", @"id": @"Etalase", @"tr": @"Vitrin",
+               @"it": @"Vetrina",
+           } },
+        @{ @"id": @"orders",
+           @"Icon": @"doc.text",
+           @"URL": @"https://example.com/orders",
+           @"Titles": @{
+               @"zh-Hans": @"订单详情", @"zh-Hant": @"訂單詳情", @"en": @"Order Details",
+               @"ja": @"注文詳細", @"ko": @"주문 상세", @"es": @"Detalles del pedido",
+               @"fr": @"Détails de la commande", @"de": @"Bestelldetails", @"pt": @"Detalhes do pedido",
+               @"ru": @"Детали заказа", @"ar": @"تفاصيل الطلب", @"th": @"รายละเอียดคำสั่งซื้อ",
+               @"vi": @"Chi tiết đơn hàng", @"id": @"Detail pesanan", @"tr": @"Sipariş detayları",
+               @"it": @"Dettagli ordine",
+           } },
     ];
+}
+
+// 把系统语言规范成我们用的短码：zh-Hans / zh-Hant / en / ja …
+static NSString *PBNormalizeLanguage(NSString *raw) {
+    if (![raw isKindOfClass:[NSString class]] || raw.length == 0) return @"en";
+    NSString *s = [raw stringByReplacingOccurrencesOfString:@"_" withString:@"-"];
+    NSArray<NSString *> *parts = [s componentsSeparatedByString:@"-"];
+    NSString *base = [parts.firstObject lowercaseString] ?: @"en";
+    if ([base isEqualToString:@"zh"]) {
+        BOOL hant = NO;
+        for (NSString *p in parts) {
+            NSString *u = [p uppercaseString];
+            if ([u hasPrefix:@"HANT"] || [u isEqualToString:@"TW"] ||
+                [u isEqualToString:@"HK"] || [u isEqualToString:@"MO"]) {
+                hant = YES;
+            }
+        }
+        return hant ? @"zh-Hant" : @"zh-Hans";
+    }
+    return base;
+}
+
+static NSString *PBCurrentLanguage(void) {
+    NSArray<NSString *> *langs = [NSLocale preferredLanguages];
+    return PBNormalizeLanguage(langs.firstObject);
+}
+
+// titles 里按「当前语言 → 语言基码 → 另一套中文 → en → 任意非空」取标题
+static NSString *PBTitleForTitles(NSDictionary *titles) {
+    if (![titles isKindOfClass:[NSDictionary class]] || titles.count == 0) return nil;
+    NSString *cur = PBCurrentLanguage();
+    NSString *base = [[cur componentsSeparatedByString:@"-"] firstObject];
+    NSMutableArray<NSString *> *keys = [NSMutableArray arrayWithObject:cur];
+    if (base.length && ![keys containsObject:base]) [keys addObject:base];
+    if ([cur hasPrefix:@"zh"]) {
+        [keys addObject:[cur isEqualToString:@"zh-Hans"] ? @"zh-Hant" : @"zh-Hans"];
+    }
+    [keys addObject:@"en"];
+
+    for (NSString *k in keys) {
+        id v = titles[k];
+        if ([v isKindOfClass:[NSString class]] && [v length] > 0) return v;
+    }
+    for (NSString *k in titles) {
+        if (![k isKindOfClass:[NSString class]]) continue;
+        if (base.length && [k.lowercaseString hasPrefix:base]) {
+            id v = titles[k];
+            if ([v isKindOfClass:[NSString class]] && [v length] > 0) return v;
+        }
+    }
+    for (NSString *k in titles) {
+        id v = titles[k];
+        if ([v isKindOfClass:[NSString class]] && [v length] > 0) return v;
+    }
+    return nil;
+}
+
+static NSString *PBRemoteCachePath(void) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (docs.length == 0) docs = NSTemporaryDirectory();
+    return [docs stringByAppendingPathComponent:@"ProfileButtons.remote.json"];
+}
+
+// ---- 远程控制端 ----
+static NSString *const PBRemoteDidChangeNotification = @"PBRemoteDidChange";
+static NSDictionary *gPBRemoteConfig;          // 最近一次成功的远程 JSON
+static NSTimeInterval gPBRemoteLastFetch;      // 上次拉取时间（CACurrentMediaTime）
+
+static void PBLoadRemoteCache(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSData *data = [NSData dataWithContentsOfFile:PBRemoteCachePath()];
+        if (data.length == 0) return;
+        id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        if ([obj isKindOfClass:[NSDictionary class]]) {
+            gPBRemoteConfig = obj;
+            PB_LOG(@"remote: cache loaded (%lu button(s))",
+                   (unsigned long)[obj[@"buttons"] count]);
+        }
+    });
+}
+
+static void PBFetchRemoteConfig(BOOL force) {
+    NSString *urlString = PBConfig()[@"ControlURL"];
+    if (![urlString isKindOfClass:[NSString class]] || urlString.length == 0) return;
+
+    NSTimeInterval now = CACurrentMediaTime();
+    if (!force && gPBRemoteLastFetch > 0 && now - gPBRemoteLastFetch < 600.0) return;
+    gPBRemoteLastFetch = now;
+
+    NSURLComponents *comps = [NSURLComponents componentsWithString:urlString];
+    if (!comps) { PB_LOG(@"remote: bad ControlURL"); return; }
+
+    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
+    if (comps.queryItems) [items addObjectsFromArray:comps.queryItems];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"lang" value:PBCurrentLanguage()]];
+    NSString *appVersion = [[NSBundle mainBundle] infoDictionary][@"CFBundleShortVersionString"];
+    if (appVersion.length) [items addObject:[NSURLQueryItem queryItemWithName:@"v" value:appVersion]];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"t"
+                                                 value:[NSString stringWithFormat:@"%.0f", [[NSDate date] timeIntervalSince1970]]]];
+    comps.queryItems = items;
+
+    NSURL *url = comps.URL;
+    if (!url) { PB_LOG(@"remote: bad url %@", urlString); return; }
+
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    cfg.timeoutIntervalForRequest = 5.0;
+    cfg.timeoutIntervalForResource = 8.0;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    req.HTTPShouldHandleCookies = NO;
+
+    PB_LOG(@"remote: fetching %@", url.absoluteString);
+    [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
+        if (error || data.length == 0) {
+            PB_LOG(@"remote: fetch failed (%@)", error.localizedDescription ?: @"no data");
+            return;
+        }
+        id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        if (![obj isKindOfClass:[NSDictionary class]]) {
+            PB_LOG(@"remote: invalid json");
+            return;
+        }
+        NSArray *buttons = ((NSDictionary *)obj)[@"buttons"];
+        if (![buttons isKindOfClass:[NSArray class]] || buttons.count == 0) {
+            PB_LOG(@"remote: no buttons in response");
+            return;
+        }
+        NSMutableArray *valid = [NSMutableArray array];
+        for (NSDictionary *b in buttons) {
+            if (![b isKindOfClass:[NSDictionary class]]) continue;
+            NSString *u = b[@"url"];
+            if (![u isKindOfClass:[NSString class]] || u.length == 0) continue;
+            [valid addObject:b];
+        }
+        if (valid.count == 0) { PB_LOG(@"remote: no valid buttons"); return; }
+
+        NSDictionary *merged = @{ @"buttons": valid, @"fetchedAt": @([[NSDate date] timeIntervalSince1970]) };
+        gPBRemoteConfig = merged;
+        BOOL saved = [data writeToFile:PBRemoteCachePath() atomically:YES];
+        PB_LOG(@"remote: ok (%lu button(s), cached=%d)", (unsigned long)valid.count, saved);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:PBRemoteDidChangeNotification object:nil];
+        });
+    }] resume];
+}
+
+// 把内置的三条（带多语言标题）解析成 {Title, URL, Icon}
+static NSArray<NSDictionary *> *PBDefaultButtonsResolved(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *d in PBDefaultButtons()) {
+        [out addObject:@{ @"id": d[@"id"] ?: @"",
+                          @"Title": PBTitleForTitles(d[@"Titles"]) ?: @"Link",
+                          @"URL": d[@"URL"] ?: @"",
+                          @"Icon": d[@"Icon"] ?: @"" }];
+    }
+    return out;
+}
+
+// 远程配置（没有远程返回 nil，交给本地/内置兜底）
+static NSArray<NSDictionary *> *PBRemoteButtons(void) {
+    PBLoadRemoteCache();
+
+    NSArray *defaults = PBDefaultButtons();
+    NSArray *remote = [gPBRemoteConfig[@"buttons"] isKindOfClass:[NSArray class]]
+                        ? gPBRemoteConfig[@"buttons"] : nil;
+    if (remote.count == 0) return nil;
+
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *b in remote) {
+        if (![b isKindOfClass:[NSDictionary class]]) continue;
+        NSString *bid = [b[@"id"] isKindOfClass:[NSString class]] ? b[@"id"] : nil;
+
+        NSDictionary *def = nil;
+        if (bid.length) {
+            for (NSDictionary *d in defaults) {
+                if ([d[@"id"] isEqual:bid]) { def = d; break; }
+            }
+        }
+
+        id titleValue = b[@"title"] ?: b[@"titles"];
+        NSString *title = nil;
+        if ([titleValue isKindOfClass:[NSDictionary class]]) {
+            title = PBTitleForTitles(titleValue);
+        } else if ([titleValue isKindOfClass:[NSString class]] && [titleValue length]) {
+            title = titleValue;
+        }
+        if (title.length == 0 && def) title = PBTitleForTitles(def[@"Titles"]);
+        if (title.length == 0) title = @"Link";
+
+        NSString *url = [b[@"url"] isKindOfClass:[NSString class]] ? b[@"url"] : nil;
+        if (url.length == 0 && def) url = def[@"URL"];
+
+        NSString *icon = [b[@"icon"] isKindOfClass:[NSString class]] ? b[@"icon"] : nil;
+        if (icon.length == 0 && def) icon = def[@"Icon"];
+
+        [out addObject:@{ @"id": bid ?: @"",
+                          @"Title": title,
+                          @"URL": url ?: @"",
+                          @"Icon": icon ?: @"" }];
+    }
+    return out.count ? out : nil;
+}
+
+// 优先级：远程控制端 > 本地 PBConfig.plist 的 Buttons > 内置（多语言）
+static NSArray<NSDictionary *> *PBButtonConfigs(void) {
+    NSArray *remote = PBRemoteButtons();
+    if (remote.count) return remote;
+
+    NSArray *local = PBConfig()[@"Buttons"];
+    if ([local isKindOfClass:[NSArray class]] && local.count > 0) return local;
+
+    return PBDefaultButtonsResolved();
 }
 
 static NSDictionary *PBConfig(void) {
@@ -121,11 +378,6 @@ static NSDictionary *PBConfig(void) {
     return cfg;
 }
 
-static NSArray<NSDictionary *> *PBButtonConfigs(void) {
-    NSArray *arr = PBConfig()[@"Buttons"];
-    if ([arr isKindOfClass:[NSArray class]] && arr.count > 0) return arr;
-    return PBDefaultButtons();
-}
 
 static BOOL PBDebug(void) {
     id v = PBConfig()[@"Debug"];
@@ -988,6 +1240,16 @@ static BOOL PBNativeTryInstall(UIView *anchor, UIViewController *vc) {
     gPBNativeDelta = PBRowHeight() + 6.0;
     gPBActionBarIndexPath = ip;
 
+    // 已经 hook 过：不要再 hook 一次（否则 orig 会指向我们自己，递归）
+    if (gPBNativeHooked) {
+        [cv.collectionViewLayout invalidateLayout];
+        [cv setNeedsLayout];
+        [cell setNeedsLayout];
+        PB_LOG(@"native: refreshed delta=%.0f cell=%@ ip=%@", gPBNativeDelta,
+               NSStringFromClass([cell class]), ip);
+        return YES;
+    }
+
     Class layoutClass = [cv.collectionViewLayout class];
     Class cellClass = [cell class];
 
@@ -1340,14 +1602,11 @@ static void PBLogProfileClasses(void) {
 // MARK: - 安装
 // ---------------------------------------------------------------------------
 
-static const char kPBInstalledRowKey;
-static const char kPBLastAttemptKey;
-static const char kPBFailCountKey;
-static const char kPBFirstAttemptKey;
-static const char kPBNativeInstalledKey;
-
 static void PBInstallForViewController(UIViewController *vc) {
     if (!vc.view || vc.view.window == nil) return;
+
+    // 顺手刷一次远程配置（内部有 10 分钟节流，不会频繁请求）
+    PBFetchRemoteConfig(NO);
 
     // 原生插入已经成功过 → 布局由 hook 维护，不需要再装
     if ([objc_getAssociatedObject(vc, &kPBNativeInstalledKey) boolValue]) return;
@@ -1471,6 +1730,39 @@ static void PBInstallForViewController(UIViewController *vc) {
     }
 }
 
+// 远程配置更新后：拆掉现有按钮行，按新配置立即重建
+static void PBRebuildVisibleRows(void) {
+    UIViewController *vc = PBTopViewController();
+    if (!vc || !PBIsProfileViewController(vc)) return;
+
+    UICollectionView *cv = gPBNativeCV;
+    for (UICollectionViewCell *cell in cv.visibleCells) {
+        UIView *row = objc_getAssociatedObject(cell, &kPBNativeRowKey);
+        if (!row) continue;
+        [row removeFromSuperview];
+        objc_setAssociatedObject(cell, &kPBNativeRowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(cell, &kPBNativeOrigFramesKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (cv) [cv setNeedsLayout];
+
+    UIView *row = objc_getAssociatedObject(vc, &kPBInstalledRowKey);
+    if (row) {
+        PBRowTracker *tracker = objc_getAssociatedObject(vc, &kPBTrackerKey);
+        [tracker stop];
+        objc_setAssociatedObject(vc, &kPBTrackerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [row removeFromSuperview];
+        objc_setAssociatedObject(vc, &kPBInstalledRowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    objc_setAssociatedObject(vc, &kPBNativeInstalledKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(vc, &kPBLastAttemptKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(vc, &kPBFailCountKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    PB_LOG(@"remote: rebuilding buttons (%lu, lang=%@)",
+           (unsigned long)PBButtonConfigs().count, PBCurrentLanguage());
+    PBInstallForViewController(vc);
+}
+
 // ---------------------------------------------------------------------------
 // MARK: - Hook：所有 VC 的 viewDidAppear（profile 页出现时安装）
 // ---------------------------------------------------------------------------
@@ -1526,11 +1818,12 @@ __attribute__((constructor)) static void PBInit(void) {
             method_setImplementation(m2, (IMP)PBViewWillAppear);
         }
 
-        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d)",
-               @"2025-10-21-r11",
+        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@)",
+               @"2025-10-21-r12",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
-               PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert());
+               PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
+               PBCurrentLanguage());
         PB_LOG(@"env: ios=%@ screen=%@ app=%@ (%@) log=%@",
                [[UIDevice currentDevice] systemVersion],
                NSStringFromCGRect([UIScreen mainScreen].bounds),
@@ -1540,11 +1833,26 @@ __attribute__((constructor)) static void PBInit(void) {
         PB_LOG(@"bundle=%@", [[NSBundle mainBundle] bundlePath]);
         PB_LOG(@"hooks: viewDidAppear=%d viewWillAppear=%d",
                PBOrigViewDidAppear != NULL, PBOrigViewWillAppear != NULL);
+        PB_LOG(@"i18n: preferred=%@ -> %@", [NSLocale preferredLanguages].firstObject ?: @"?", PBCurrentLanguage());
+        PB_LOG(@"remote: ControlURL=%@", PBConfig()[@"ControlURL"] ?: @"(none)");
 
         Class profileClass = objc_getClass("IGProfile.IGProfileViewController");
         PB_LOG(@"objc_getClass(\"IGProfile.IGProfileViewController\") = %@",
                profileClass ? NSStringFromClass(profileClass) : @"(nil)");
         if (PBDebug()) PBLogProfileClasses();
+
+        // 远程配置：先读缓存立即可用，再异步拉一次最新的；变化时重建按钮行
+        PBLoadRemoteCache();
+        [[NSNotificationCenter defaultCenter] addObserverForName:PBRemoteDidChangeNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification *note) {
+            PBRebuildVisibleRows();
+        }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            PBFetchRemoteConfig(YES);
+        });
 
         PBStartWatchdog();
         if (PBShouldShowLaunchToast()) PBShowLaunchToast();

@@ -57,45 +57,43 @@ ProfileButtonsTweak/
 ### 第 1 步：改按钮（`PBConfig.plist`）
 
 `PBConfig.plist` 就是配置模板，改好后把它放到 App 包里：`Payload/Instagram.app/PBConfig.plist`
-（和 `Instagram` 可执行文件同级）。改里面的 `Buttons` 数组：
+（和 `Instagram` 可执行文件同级）。
+
+**按钮内容有三种来源，优先级：远程控制端 > 本地 `Buttons` > 内置三条**
 
 ```xml
+<!-- ★ 控制端：App 启动时拉取，返回 JSON 里的链接/文案会覆盖本地 -->
+<key>ControlURL</key><string>https://你的域名/api/buttons</string>
+
+<!-- 可选：本地覆盖（不写就用内置的 店铺中心 / 商品橱窗 / 订单详情） -->
 <key>Buttons</key>
 <array>
     <dict>
-        <key>Title</key><string>官网</string>
-        <key>URL</key><string>https://你的域名</string>
-        <key>Icon</key><string>globe</string>       <!-- SF Symbols 名，可删 -->
-    </dict>
-    <dict>
-        <key>Title</key><string>客服</string>
-        <key>URL</key><string>https://你的域名/support</string>
-        <key>Icon</key><string>bubble.left</string>
-    </dict>
-    <dict>
-        <key>Title</key><string>社群</string>
-        <key>URL</key><string>https://t.me/你的群</string>
-        <key>Icon</key><string>person.2.fill</string>
+        <key>Title</key><string>店铺中心</string>
+        <key>URL</key><string>https://你的域名/store</string>
+        <key>Icon</key><string>storefront</string>   <!-- SF Symbols 名，可删 -->
     </dict>
 </array>
+
 <key>Position</key><string>above</string>   <!-- above：放在「编辑主页」上面（默认）；below：放下面 -->
-<key>RowHeight</key><real>36</real>          <!-- 插进布局时用的行高 -->
-<key>OverlayHeight</key><real>28</real>      <!-- 跟随重叠层的行高（更矮=更不挡） -->
+<key>RowHeight</key><real>36</real>          <!-- 插进布局时用的行高（原生插入撑高 cell 的量） -->
+<key>NativeInsert</key><true/>               <!-- 布局级插入；false 回退到跟随重叠层 -->
+<key>OverlayHeight</key><real>28</real>      <!-- 跟随重叠层的行高 -->
 <key>OverlayGap</key><real>4</real>          <!-- 重叠层与按钮行的间距 -->
 <key>ForceDock</key><false/>                 <!-- true：直接悬浮在顶部，排障用 -->
-<key>TryHeaderInsert</key><false/>          <!-- true：先试插进 IG 的 header 布局 -->
-<key>ShowLaunchToast</key><true/>            <!-- 启动提示，确认 dylib 已加载 -->
+<key>TryHeaderInsert</key><false/>           <!-- 次选：插进 header 的手工/约束布局 -->
+<key>ShowLaunchToast</key><false/>           <!-- 启动提示，确认 dylib 已加载 -->
 <key>UseSafariViewController</key><true/>
 <key>Debug</key><true/>
 ```
 
+- **内置三条已经是「店铺中心 / 商品橱窗 / 订单详情」，并带 16 种语言**，按系统语言自动切换
+  （`zh-Hans` / `zh-Hant` / `en` / `ja` / `ko` / `es` / `fr` / `de` / `pt` / `ru` / `ar` / `th` / `vi` / `id` / `tr` / `it`）。
+- 远程 JSON 里 `title` 是一个「语言 → 文案」的字典；App 的选择顺序：
+  当前语言 → 语言基码 → 另一套中文 → `en` → 任意非空。
+- **不放 `PBConfig.plist` 也能用**：三个内置按钮照常出现。
 - 条数随意，2 条、3 条、5 条都行（自动均分宽度）。
-- 默认 **`Position = above`**：按钮在「编辑主页 / 分析」这一行的**上面**。
-  之前放下面会被 IG 自己的按钮（专业账户 / 推广 / 分享等）压住，所以默认改成上面了。
-- **没有放 `PBConfig.plist` 也不影响使用**：代码里默认 3 个按钮 + 详细日志。
-  需要改链接/位置时才需要放这个文件。
 - `http/https` 走应用内浏览器；`tg://`、`instagram://`、`mailto:` 这类交给系统。
-- 不提供配置文件也能跑，会用代码里 `PBDefaultButtons()` 的三条占位链接。
 - 只有**自己的主页**会出现这三个按钮：代码是靠「能不能找到『编辑主页』按钮」来判断的，
   别人的主页没有这个按钮，所以不会插入（也不会一直空转，失败 8 次就放弃）。
 - 这个 plist 要**放进 App 包里**（`Payload/Instagram.app/PBConfig.plist`），不是放在 dylib 里。
