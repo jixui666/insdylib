@@ -844,6 +844,8 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
 @property (nonatomic, strong) CADisplayLink *link;
 @property (nonatomic, copy) UIView *(^resolver)(void);   // 锚点失效时重新找
 @property (nonatomic, assign) NSTimeInterval lastResolve;
+@property (nonatomic, assign) NSTimeInterval lastAnchorSeen;
+@property (nonatomic, assign) BOOL hiddenForScroll;
 - (instancetype)initWithRow:(UIView *)row anchor:(UIView *)anchor vc:(UIViewController *)vc;
 - (void)start;
 - (void)stop;
@@ -857,6 +859,7 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
         _row = row;
         _anchor = anchor;
         _vc = vc;
+        _lastAnchorSeen = CACurrentMediaTime();
         __weak UIViewController *weakVC = vc;
         _resolver = ^UIView *{
             UIViewController *strongVC = weakVC;
@@ -887,12 +890,13 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
     if (!self.resolver) return NO;
 
     NSTimeInterval now = CACurrentMediaTime();
-    if (now - self.lastResolve < 0.4) return NO;
+    if (now - self.lastResolve < 0.35) return NO;
     self.lastResolve = now;
 
     UIView *found = self.resolver();
     if (found) {
         self.anchor = found;
+        self.lastAnchorSeen = now;
         PB_LOG(@"anchor re-acquired: %@", NSStringFromClass([found class]));
         return YES;
     }
@@ -910,23 +914,36 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
         [self stop];          // 页面不可见就停，等下次 viewDidAppear 再重启
         return;
     }
+
+    NSTimeInterval now = CACurrentMediaTime();
     if (![self reacquireAnchorIfNeeded]) {
-        row.hidden = YES;     // 暂时没锚点：先藏起来，等重新找到再显示，别定格在原地
+        // 刷新/重建过渡期：保持最后一帧 2 秒，别一帧一帧地闪
+        if (now - self.lastAnchorSeen < 2.0) return;
+        row.hidden = YES;
         return;
     }
+    self.lastAnchorSeen = now;
+
     UIView *anchor = self.anchor;
     CGFloat h = row.bounds.size.height > 0 ? row.bounds.size.height : PBOverlayHeight();
     CGRect rect = PBRowRectForAnchor(anchor, host);
     CGFloat rawY = rect.origin.y - PBOverlayGap() - h;
+    CGFloat safeTop = host.safeAreaInsets.top;
 
-    // 按钮行滚到导航栏下面时，行也跟着“滚出去”，而不是钉在顶部 —— 看起来才像真的在页面里
-    if (rawY < host.safeAreaInsets.top + 2.0) {
+    // 按钮行滚到导航栏下面时，行也跟着“滚出去”，而不是钉在顶部。
+    // 用一点滞回：进入 -24 才藏、回到 +2 才显，避免在边界上一帧藏一帧显（看起来就是闪）。
+    if (self.hiddenForScroll) {
+        if (rawY > safeTop + 2.0) self.hiddenForScroll = NO;
+    } else if (rawY < safeTop - 24.0) {
+        self.hiddenForScroll = YES;
+    }
+    if (self.hiddenForScroll) {
         row.hidden = YES;
         return;
     }
     if (row.hidden) row.hidden = NO;
 
-    CGRect f = PBRowFrameAboveRect(rect, host.bounds, host.safeAreaInsets.top, h, PBOverlayGap());
+    CGRect f = PBRowFrameAboveRect(rect, host.bounds, safeTop, h, PBOverlayGap());
     if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
 }
 
@@ -1067,6 +1084,7 @@ static void PBLogProfileClasses(void) {
 static const char kPBInstalledRowKey;
 static const char kPBLastAttemptKey;
 static const char kPBFailCountKey;
+static const char kPBFirstAttemptKey;
 
 static void PBInstallForViewController(UIViewController *vc) {
     if (!vc.view || vc.view.window == nil) return;
@@ -1095,12 +1113,21 @@ static void PBInstallForViewController(UIViewController *vc) {
 
     // 别人的主页没有「编辑主页」按钮，试几次就别再扫了，省性能
     NSNumber *fails = objc_getAssociatedObject(vc, &kPBFailCountKey);
-    if (fails.integerValue >= 8) return;
+    if (fails.integerValue >= 40) return;
 
-    // 同一个页面 4 秒内只尝试一次，避免看门狗刷日志
+    // 刚进页面时 header 可能还没建好：前 3 秒 0.12s 一次快速重试，
+    // 之后退回 3s 一次，避免「进页面要等好几秒按钮才出现」。
     NSTimeInterval now = CACurrentMediaTime();
+    NSNumber *first = objc_getAssociatedObject(vc, &kPBFirstAttemptKey);
+    if (!first) {
+        first = @(now);
+        objc_setAssociatedObject(vc, &kPBFirstAttemptKey, first, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    NSTimeInterval elapsed = now - first.doubleValue;
+    NSTimeInterval interval = (elapsed < 3.0) ? 0.12 : 3.0;
+
     NSNumber *last = objc_getAssociatedObject(vc, &kPBLastAttemptKey);
-    if (last && now - last.doubleValue < 4.0) return;
+    if (last && now - last.doubleValue < interval) return;
     objc_setAssociatedObject(vc, &kPBLastAttemptKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     UIView *anchor = PBFindEditProfileAnchor(vc.view);
@@ -1108,7 +1135,7 @@ static void PBInstallForViewController(UIViewController *vc) {
         NSUInteger count = fails.unsignedIntegerValue + 1;
         objc_setAssociatedObject(vc, &kPBFailCountKey, @(count), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (count <= 3) {
-            PB_LOG(@"edit-profile button not found in %@ (attempt %lu/8, view=%dx%d)",
+            PB_LOG(@"edit-profile button not found in %@ (attempt %lu/40, view=%dx%d)",
                    NSStringFromClass([vc class]), (unsigned long)count,
                    (int)vc.view.bounds.size.width, (int)vc.view.bounds.size.height);
             if (PBDebug()) {
@@ -1178,12 +1205,13 @@ static void PBInstallForViewController(UIViewController *vc) {
 // ---------------------------------------------------------------------------
 
 typedef void (*PBViewDidAppearIMP)(id, SEL, BOOL);
-static PBViewDidAppearIMP PBOrigViewDidAppear;
+typedef void (*PBViewWillAppearIMP)(id, SEL, BOOL);
+static PBViewWillAppearIMP PBOrigViewWillAppear;
 
-static void PBViewDidAppear(id self, SEL _cmd, BOOL animated) {
-    if (PBOrigViewDidAppear) PBOrigViewDidAppear(self, _cmd, animated);
+static void PBViewWillAppear(id self, SEL _cmd, BOOL animated) {
+    if (PBOrigViewWillAppear) PBOrigViewWillAppear(self, _cmd, animated);
     UIViewController *vc = (UIViewController *)self;
-    if (PBDebug()) PB_LOG(@"appeared: %@", NSStringFromClass([vc class]));
+    // 尽量早开始装，header 数据到了就能立刻挂上，不用等下一次 viewDidAppear
     if (PBIsProfileViewController(vc)) {
         dispatch_async(dispatch_get_main_queue(), ^{
             PBInstallForViewController(vc);
@@ -1203,14 +1231,20 @@ static void PBStartWatchdog(void) {
 __attribute__((constructor)) static void PBInit(void) {
     @autoreleasepool {
         Class cls = [UIViewController class];
+
         Method m = class_getInstanceMethod(cls, @selector(viewDidAppear:));
         if (m) {
             PBOrigViewDidAppear = (PBViewDidAppearIMP)method_getImplementation(m);
             method_setImplementation(m, (IMP)PBViewDidAppear);
         }
+        Method m2 = class_getInstanceMethod(cls, @selector(viewWillAppear:));
+        if (m2) {
+            PBOrigViewWillAppear = (PBViewWillAppearIMP)method_getImplementation(m2);
+            method_setImplementation(m2, (IMP)PBViewWillAppear);
+        }
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d)",
-               @"2025-10-21-r8",
+               @"2025-10-21-r9",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert());
@@ -1221,7 +1255,8 @@ __attribute__((constructor)) static void PBInit(void) {
                [[NSBundle mainBundle] infoDictionary][@"CFBundleVersion"] ?: @"?",
                PBLogFilePath());
         PB_LOG(@"bundle=%@", [[NSBundle mainBundle] bundlePath]);
-        PB_LOG(@"UIViewController.viewDidAppear hooked=%d", PBOrigViewDidAppear != NULL);
+        PB_LOG(@"hooks: viewDidAppear=%d viewWillAppear=%d",
+               PBOrigViewDidAppear != NULL, PBOrigViewWillAppear != NULL);
 
         Class profileClass = objc_getClass("IGProfile.IGProfileViewController");
         PB_LOG(@"objc_getClass(\"IGProfile.IGProfileViewController\") = %@",
