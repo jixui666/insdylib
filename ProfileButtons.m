@@ -1219,7 +1219,9 @@ static void PBCellLayout(id self, SEL _cmd) {
 // ---------------------------------------------------------------------------
 
 typedef NSRange (*PBRangeOfStringIMP)(id, SEL, NSString *, NSStringCompareOptions, NSRange, NSLocale *);
+typedef BOOL (*PBHasPrefixIMP)(id, SEL, NSString *);
 static PBRangeOfStringIMP PBOrigRangeOfString;
+static PBHasPrefixIMP PBOrigHasPrefix;
 static NSInteger gPBStringPatchCount;
 
 static NSRange PBRangeOfString(id self, SEL _cmd, NSString *search,
@@ -1245,14 +1247,43 @@ static NSRange PBRangeOfString(id self, SEL _cmd, NSString *search,
         }
         range = NSMakeRange(MIN(range.location, len), 0);
     }
-    return PBOrigRangeOfString ? PBOrigRangeOfString(self, _cmd, search, mask, range, locale)
-                               : NSMakeRange(NSNotFound, 0);
+    if (!PBOrigRangeOfString) return NSMakeRange(NSNotFound, 0);
+    // 最后一道保险：Foundation 仍然抛异常也吞掉，绝不让它抛到 IG 的队列上
+    @try {
+        return PBOrigRangeOfString(self, _cmd, search, mask, range, locale);
+    } @catch (NSException *e) {
+        gPBStringPatchCount++;
+        if (gPBStringPatchCount <= 5) {
+            PB_LOG(@"patched string exception %@: %@", e.name, e.reason);
+        }
+        return NSMakeRange(NSNotFound, 0);
+    }
+}
+
+static BOOL PBHasPrefix(id self, SEL _cmd, NSString *prefix) {
+    if (prefix == nil) {
+        gPBStringPatchCount++;
+        if (gPBStringPatchCount <= 5) {
+            PB_LOG(@"patched nil hasPrefix: in %@ (count=%ld)",
+                   NSStringFromClass([self class]), (long)gPBStringPatchCount);
+        }
+        return NO;
+    }
+    return PBOrigHasPrefix ? PBOrigHasPrefix(self, _cmd, prefix) : NO;
 }
 
 static BOOL PBInstallStringCrashPatch(void) {
-    return PBHookSel([NSString class],
-                     @selector(rangeOfString:options:range:locale:),
-                     (IMP)PBRangeOfString, (IMP *)&PBOrigRangeOfString);
+    // 崩溃栈里抛出异常的就是 -[NSString rangeOfString:options:range:locale:]，
+    // 说明实际走的是 NSString 自己的实现（具体子类没有覆盖），因此只挂 NSString 即可，
+    // 不要再挂具体子类，否则 orig 指针会被覆盖/递归。
+    BOOL ok = PBHookSel([NSString class],
+                        @selector(rangeOfString:options:range:locale:),
+                        (IMP)PBRangeOfString, (IMP *)&PBOrigRangeOfString);
+    BOOL ok2 = PBHookSel([NSString class],
+                         @selector(hasPrefix:),
+                         (IMP)PBHasPrefix, (IMP *)&PBOrigHasPrefix);
+    PB_LOG(@"string patch: rangeOfString=%d hasPrefix=%d", ok, ok2);
+    return ok || ok2;
 }
 
 // ---------------------------------------------------------------------------
@@ -1952,7 +1983,7 @@ __attribute__((constructor)) static void PBInit(void) {
         BOOL nagFilter = PBInstallBetaNagFilter();
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d, nagFilter=%d)",
-               @"2025-10-21-r15",
+               @"2025-10-21-r16",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
