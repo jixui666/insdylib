@@ -184,6 +184,25 @@ Sideloadly 的特色之一就是 **Tweak Injection**（支持 `.dylib / .deb / .
 > 这一层「适配」是这类 tweak 的常态：IG 每次大版本升级，内部层级都可能变，
 > 所以上面留了标识符 + 文字双兜底和 Debug dump。
 
+### 4.1 按钮没出现？按这个顺序查
+
+1. **先确认 dylib 真的被加载了**：启动 2 秒后屏幕底部会出现一条
+   `ProfileButtons 已加载` 的小提示（`ShowLaunchToast`，Debug 模式默认开），
+   同时日志第一行是 `[ProfileButtons] loaded build=...`。
+   **提示和日志都没有 → 注入没生效**：Sideloadly 里 dylib 没加进去、装的是旧 IPA、
+   或者签名失败。重新走一遍第 3 步。
+2. **有加载、但没按钮**：看日志里这两类行——
+   - `appeared: <类名>`：个人主页的真实类名；
+   - `edit-profile button not found in <类名> (attempt n/8, view=...)`；
+   - `tappable: ... id=... text=...`：当前页面里所有可点控件（Debug 才有）。
+   把这几行发出来，就能直接定位是「页面没识别」还是「按钮没找到」。
+3. **想立刻看到按钮**：配置里临时设 `ForceDock = true`，跳过 header 插入，
+   直接悬浮在安全区顶部——用来验证「加载/点击/打开网页」这条链路是通的。
+4. `installed ... in header` 之后如果仍然看不见，新版本会自己兜底：
+   0.6 秒后检查行是否可见，不可见就打印
+   `row not visible after install (...) — docking instead` 并改成悬浮。
+   所以要么看到 header 里的按钮，要么看到顶部悬浮条，不会两头都空。
+
 ---
 
 ## 5. 换浏览器 / 改样式

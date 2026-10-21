@@ -82,6 +82,18 @@ static BOOL PBPositionAbove(void) {
     return YES;
 }
 
+// 强制悬浮：不做头部插入，直接贴在安全区顶部（排障用，保证一定能看到）
+static BOOL PBForceDock(void) {
+    id v = PBConfig()[@"ForceDock"];
+    return v ? [v boolValue] : NO;
+}
+
+static BOOL PBShowLaunchToast(void) {
+    id v = PBConfig()[@"ShowLaunchToast"];
+    if (v) return [v boolValue];
+    return PBDebug();
+}
+
 // ---------------------------------------------------------------------------
 // MARK: - 通用：找 VC / 找视图 / 打印层级
 // ---------------------------------------------------------------------------
@@ -124,8 +136,26 @@ static UIViewController *PBTopViewController(void) {
 static BOOL PBIsProfileViewController(UIViewController *vc) {
     if (!vc) return NO;
     NSString *name = NSStringFromClass([vc class]);
-    // Swift 运行时类名形如 "IGProfile.IGProfileViewController"
-    return [name containsString:@"IGProfileViewController"];
+    // Swift 运行时类名形如 "IGProfile.IGProfileViewController"。
+    // 放宽到「名字里有 Profile 且不是编辑资料页」，避免 IG 升级换类名后完全失配。
+    if ([name containsString:@"Profile"] == NO) return NO;
+    if ([name containsString:@"EditProfile"]) return NO;
+    if ([name containsString:@"BusinessProfile"]) return NO;
+    return YES;
+}
+
+// IG 的「按钮」不一定是 UIControl：也可能是带点击手势的自绘视图
+static UIView *PBTappableAncestor(UIView *v) {
+    UIView *cur = v;
+    for (int i = 0; i < 10 && cur; i++, cur = cur.superview) {
+        if ([cur isKindOfClass:[UIControl class]]) return cur;
+        for (UIGestureRecognizer *g in cur.gestureRecognizers) {
+            if ([g isKindOfClass:[UITapGestureRecognizer class]]) return cur;
+        }
+        NSString *cls = NSStringFromClass([cur class]);
+        if ([cls containsString:@"Button"] || [cls containsString:@"ActionRow"]) return cur;
+    }
+    return nil;
 }
 
 static NSString *PBViewOwnText(UIView *v) {
@@ -134,6 +164,8 @@ static NSString *PBViewOwnText(UIView *v) {
         NSString *t = [b titleForState:b.state];
         if (t.length == 0) t = b.currentTitle;
         if (t.length == 0) t = b.titleLabel.text;
+        if (t.length == 0) t = [b attributedTitleForState:b.state].string;
+        if (t.length == 0 && b.configuration) t = b.configuration.title;
         if (t.length) return t;
     }
     if ([v isKindOfClass:[UILabel class]]) {
@@ -154,15 +186,6 @@ static BOOL PBTextMatchesEditProfile(NSString *text) {
     return NO;
 }
 
-// 从任意视图向上找最近的 UIControl（IG 的按钮常是自绘控件 + 内部 UILabel）
-static UIControl *PBEnclosingControl(UIView *v) {
-    UIView *cur = v;
-    for (int i = 0; i < 8 && cur; i++, cur = cur.superview) {
-        if ([cur isKindOfClass:[UIControl class]]) return (UIControl *)cur;
-    }
-    return nil;
-}
-
 static UIView *PBFindEditProfileAnchor(UIView *root) {
     if (!root) return nil;
 
@@ -173,30 +196,57 @@ static UIView *PBFindEditProfileAnchor(UIView *root) {
         [queue removeObjectAtIndex:0];
         visited++;
 
+        BOOL matched = NO;
+
         // 1) IG 自己给这个按钮挂了无障碍标识，最可靠
         NSString *ident = v.accessibilityIdentifier;
         if (ident.length &&
             ([ident isEqualToString:@"edit_profile_button"] ||
              [ident localizedCaseInsensitiveContainsString:@"edit_profile"])) {
-            return v;
+            matched = YES;
         }
 
-        // 2) 文字兜底（按钮本身、按钮内部 label、accessibilityLabel）
-        NSString *text = PBViewOwnText(v);
-        if (PBTextMatchesEditProfile(text)) {
-            UIControl *control = PBEnclosingControl(v);
-            if (control) return control;
-            if (v.userInteractionEnabled) return v;
-        }
-        NSString *a11y = v.accessibilityLabel;
-        if (a11y.length && PBTextMatchesEditProfile(a11y)) {
-            UIControl *control = PBEnclosingControl(v);
-            if (control) return control;
+        // 2) 文字兜底（按钮本身、按钮内部 label、accessibilityLabel、attributed title）
+        if (!matched && PBTextMatchesEditProfile(PBViewOwnText(v))) matched = YES;
+        if (!matched && PBTextMatchesEditProfile(v.accessibilityLabel)) matched = YES;
+
+        if (matched) {
+            UIView *tappable = PBTappableAncestor(v);
+            if (tappable) return tappable;
+            if (v.userInteractionEnabled && v.bounds.size.width > 60) return v;
+            // 文字命中但暂时找不到可点的祖先：返回最上层那个有尺寸的祖先
+            UIView *up = v.superview;
+            for (int i = 0; i < 6 && up; i++, up = up.superview) {
+                if (up.bounds.size.width > 60 && up.bounds.size.height > 20) return up;
+            }
         }
 
         [queue addObjectsFromArray:v.subviews];
     }
     return nil;
+}
+
+// 在 root 里找「所有可能是按钮」的可点视图，仅用于 debug 日志
+static NSArray<NSString *> *PBSampleTappableViews(UIView *root) {
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSInteger visited = 0;
+    while (queue.count > 0 && visited < 12000 && result.count < 40) {
+        UIView *v = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        visited++;
+        BOOL tappable = [v isKindOfClass:[UIControl class]] || v.gestureRecognizers.count > 0;
+        NSString *text = PBViewOwnText(v) ?: v.accessibilityLabel;
+        if (tappable && (text.length || v.accessibilityIdentifier.length)) {
+            [result addObject:[NSString stringWithFormat:@"%@(%@) id=%@ text=%@",
+                               NSStringFromClass([v class]),
+                               NSStringFromCGRect(v.frame),
+                               v.accessibilityIdentifier ?: @"-",
+                               text ?: @"-"]];
+        }
+        [queue addObjectsFromArray:v.subviews];
+    }
+    return result;
 }
 
 static void PBDumpAncestors(UIView *v, const char *why) {
@@ -487,8 +537,16 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
 
     BOOL shifted = NO, grew = NO;
     if (above) {
-        // 把按钮行以及它下面的内容整体推下去，腾出 44pt
+        // 把按钮行以及它下面的内容整体推下去，腾出 44pt。
+        // 推不动说明父视图是手写 frame / 顶部被裁，硬放在这里会完全看不见，
+        // 直接放弃 header 方案，交给 dock 兜底。
         shifted = PBAdjustConstraint(rowContainer, NSLayoutAttributeTop, delta);
+        if (!shifted) {
+            [row removeFromSuperview];
+            PB_LOG(@"above-mode: no shiftable top constraint on %@ — fallback to dock",
+                   NSStringFromClass([rowContainer class]));
+            return NO;
+        }
     }
     // 撑大父视图，否则新加的空间会被裁掉
     for (NSLayoutConstraint *c in parent.constraints) {
@@ -506,7 +564,7 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
            above ? @"above" : @"below", NSStringFromClass([rowContainer class]),
            NSStringFromClass([parent class]), shifted, grew);
 
-    if (PBDebug() && (!grew || (above && !shifted))) {
+    if (PBDebug() && !grew) {
         PBDumpAncestors(anchor, "relative-container");
     }
     return YES;
@@ -533,6 +591,67 @@ static void PBDockToViewController(UIViewController *vc, UIView *row) {
            NSStringFromClass([vc class]));
 }
 
+// 判断插入后的按钮行到底有没有真的显示出来（被裁剪 / 尺寸为 0 都算失败）
+static BOOL PBRowIsVisible(UIView *row, UIViewController *vc) {
+    if (!row || !row.window || row.hidden || row.alpha < 0.01) return NO;
+    if (row.bounds.size.width < 20 || row.bounds.size.height < 10) return NO;
+
+    UIView *superview = row.superview;
+    if (superview) {
+        CGRect inSuper = [row convertRect:row.bounds toView:superview];
+        if (superview.clipsToBounds && !CGRectIntersectsRect(inSuper, superview.bounds)) return NO;
+    }
+    if (vc.view) {
+        CGRect inVC = [row convertRect:row.bounds toView:vc.view];
+        if (!CGRectIntersectsRect(inVC, vc.view.bounds)) return NO;
+    }
+    return YES;
+}
+
+static void PBShowLaunchToast(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *w = PBKeyWindow();
+        if (!w) return;
+        UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, MIN(300.0, w.bounds.size.width - 60.0), 34.0)];
+        label.text = @"ProfileButtons 已加载";
+        label.textAlignment = NSTextAlignmentCenter;
+        label.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+        label.textColor = [UIColor whiteColor];
+        label.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.78];
+        label.layer.cornerRadius = 17.0;
+        label.layer.masksToBounds = YES;
+        label.center = CGPointMake(w.bounds.size.width / 2.0, w.bounds.size.height - 140.0);
+        label.alpha = 0.0;
+        label.userInteractionEnabled = NO;
+        [w addSubview:label];
+        [UIView animateWithDuration:0.25 animations:^{
+            label.alpha = 1.0;
+        } completion:^(BOOL finished) {
+            [UIView animateWithDuration:0.4 delay:2.5 options:0 animations:^{
+                label.alpha = 0.0;
+            } completion:^(BOOL finished2) {
+                [label removeFromSuperview];
+            }];
+        }];
+    });
+}
+
+// 启动时列出运行时里所有名字含 ProfileViewController 的类，确认实际类名
+static void PBLogProfileClasses(void) {
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    if (!classes) return;
+    NSInteger found = 0;
+    for (unsigned int i = 0; i < count && found < 12; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        if ([name containsString:@"ProfileViewController"]) {
+            PB_LOG(@"runtime class: %@", name);
+            found++;
+        }
+    }
+    free(classes);
+}
+
 // ---------------------------------------------------------------------------
 // MARK: - 安装
 // ---------------------------------------------------------------------------
@@ -548,6 +667,16 @@ static void PBInstallForViewController(UIViewController *vc) {
     UIView *existing = objc_getAssociatedObject(vc, &kPBInstalledRowKey);
     if (existing && existing.window != nil) return;
 
+    // ForceDock：跳过头部插入，直接悬浮，保证可见
+    if (PBForceDock()) {
+        UIView *row = PBMakeRow();
+        PBDockToViewController(vc, row);
+        objc_setAssociatedObject(vc, &kPBInstalledRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        PB_LOG(@"ForceDock: docked %lu button(s) on %@",
+               (unsigned long)PBButtonConfigs().count, NSStringFromClass([vc class]));
+        return;
+    }
+
     // 别人的主页没有「编辑主页」按钮，试几次就别再扫了，省性能
     NSNumber *fails = objc_getAssociatedObject(vc, &kPBFailCountKey);
     if (fails.integerValue >= 8) return;
@@ -562,10 +691,14 @@ static void PBInstallForViewController(UIViewController *vc) {
     if (!anchor) {
         NSUInteger count = fails.unsignedIntegerValue + 1;
         objc_setAssociatedObject(vc, &kPBFailCountKey, @(count), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if (count <= 2) {
-            PB_LOG(@"edit-profile button not found in %@ (attempt %lu/8)",
-                   NSStringFromClass([vc class]), (unsigned long)count);
-            if (PBDebug()) PBDumpTree(vc.view, 0, 6);
+        if (count <= 3) {
+            PB_LOG(@"edit-profile button not found in %@ (attempt %lu/8, view=%dx%d)",
+                   NSStringFromClass([vc class]), (unsigned long)count,
+                   (int)vc.view.bounds.size.width, (int)vc.view.bounds.size.height);
+            if (PBDebug()) {
+                for (NSString *s in PBSampleTappableViews(vc.view)) PB_LOG(@"  tappable: %@", s);
+                PBDumpTree(vc.view, 0, 4);
+            }
         }
         return;
     }
@@ -573,15 +706,35 @@ static void PBInstallForViewController(UIViewController *vc) {
     PBDumpAncestors(anchor, "anchor");
 
     UIView *row = PBMakeRow();
-    BOOL ok = PBInsertIntoVerticalStack(anchor, row);
-    if (!ok) ok = PBInsertRelativeToContainer(anchor, row);
-    if (!ok) PBDockToViewController(vc, row);
+    BOOL inHeader = PBInsertIntoVerticalStack(anchor, row);
+    if (!inHeader) inHeader = PBInsertRelativeToContainer(anchor, row);
+    if (!inHeader) PBDockToViewController(vc, row);
 
     objc_setAssociatedObject(vc, &kPBInstalledRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     PB_LOG(@"installed %lu button(s) %@ edit-profile row (%@)",
            (unsigned long)PBButtonConfigs().count,
            PBPositionAbove() ? @"above" : @"below",
-           ok ? @"in header" : @"docked");
+           inHeader ? @"in header" : @"docked");
+
+    // 关键：插进 header 后确认真的看得见，看不见就退回悬浮
+    if (inHeader) {
+        __weak UIView *weakRow = row;
+        __weak UIViewController *weakVC = vc;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIView *strongRow = weakRow;
+            UIViewController *strongVC = weakVC;
+            if (!strongRow || !strongVC) return;
+            if (PBRowIsVisible(strongRow, strongVC)) return;
+
+            CGRect inVC = strongRow.window ? [strongRow convertRect:strongRow.bounds toView:strongVC.view] : CGRectZero;
+            PB_LOG(@"row not visible after install (frame in VC: %@, superview %@) — docking instead",
+                   NSStringFromCGRect(inVC), NSStringFromClass([strongRow.superview class]));
+            if (PBDebug()) PBDumpAncestors(strongRow, "invisible-row");
+            [strongRow removeFromSuperview];
+            PBDockToViewController(strongVC, strongRow);
+            objc_setAssociatedObject(strongVC, &kPBInstalledRowKey, strongRow, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +747,7 @@ static PBViewDidAppearIMP PBOrigViewDidAppear;
 static void PBViewDidAppear(id self, SEL _cmd, BOOL animated) {
     if (PBOrigViewDidAppear) PBOrigViewDidAppear(self, _cmd, animated);
     UIViewController *vc = (UIViewController *)self;
+    if (PBDebug()) PB_LOG(@"appeared: %@", NSStringFromClass([vc class]));
     if (PBIsProfileViewController(vc)) {
         dispatch_async(dispatch_get_main_queue(), ^{
             PBInstallForViewController(vc);
@@ -601,7 +755,7 @@ static void PBViewDidAppear(id self, SEL _cmd, BOOL animated) {
     }
 }
 
-// 看门狗：兜底 profile 页不会走 viewDidAppear 的情况（如页面复用 / 热重载）
+// 看门狗：兜底 profile 页不会走 viewDidAppear / 数据延迟加载的情况
 static void PBStartWatchdog(void) {
     NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:1.5 repeats:YES block:^(NSTimer *t) {
         UIViewController *vc = PBTopViewController();
@@ -618,8 +772,21 @@ __attribute__((constructor)) static void PBInit(void) {
             PBOrigViewDidAppear = (PBViewDidAppearIMP)method_getImplementation(m);
             method_setImplementation(m, (IMP)PBViewDidAppear);
         }
-        PB_LOG(@"loaded (buttons=%lu, safari=%d, debug=%d)",
-               (unsigned long)PBButtonConfigs().count, PBUseSafariViewController(), PBDebug());
+
+        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d)",
+               @"2025-10-21-r3",
+               (unsigned long)PBButtonConfigs().count,
+               PBUseSafariViewController(), PBDebug(),
+               PBPositionAbove() ? @"above" : @"below", PBForceDock());
+        PB_LOG(@"bundle=%@", [[NSBundle mainBundle] bundlePath]);
+        PB_LOG(@"UIViewController.viewDidAppear hooked=%d", PBOrigViewDidAppear != NULL);
+
+        Class profileClass = objc_getClass("IGProfile.IGProfileViewController");
+        PB_LOG(@"objc_getClass(\"IGProfile.IGProfileViewController\") = %@",
+               profileClass ? NSStringFromClass(profileClass) : @"(nil)");
+        if (PBDebug()) PBLogProfileClasses();
+
         PBStartWatchdog();
+        if (PBShowLaunchToast()) PBShowLaunchToast();
     }
 }

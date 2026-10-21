@@ -47,6 +47,14 @@
     <key>UseSafariViewController</key>
     <true/>
 
+    <!-- 排障：true = 不插 header，直接悬浮在安全区顶部，保证能看见 -->
+    <key>ForceDock</key>
+    <false/>
+
+    <!-- 启动 2 秒后弹一个「ProfileButtons 已加载」提示，确认 dylib 真的被加载 -->
+    <key>ShowLaunchToast</key>
+    <true/>
+
     <!-- 首次适配时打开，日志里会打印按钮祖先链，方便改插入位置 -->
     <key>Debug</key>
     <true/>
