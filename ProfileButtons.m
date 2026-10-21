@@ -1207,6 +1207,54 @@ static void PBCellLayout(id self, SEL _cmd) {
     gPBInNativeHook = NO;
 }
 
+// ---------------------------------------------------------------------------
+// 修补 IG 自己的崩溃：切语言后闪退
+//
+// 崩溃栈（iOS 27 / IG 452.0.1）：
+//   igdatauserdefaults.sync.queue.serial
+//   → -[NSString hasPrefix:] → -[NSString rangeOfString:options:range:locale:]
+//   → NSException（参数为 nil 或 range 越界）→ GCD 队列上无人捕获 → abort
+//
+// 在方法入口做参数兜底（不改变正常调用），避免异常抛到 IG 的同步队列上。
+// ---------------------------------------------------------------------------
+
+typedef NSRange (*PBRangeOfStringIMP)(id, SEL, NSString *, NSStringCompareOptions, NSRange, NSLocale *);
+static PBRangeOfStringIMP PBOrigRangeOfString;
+static NSInteger gPBStringPatchCount;
+
+static NSRange PBRangeOfString(id self, SEL _cmd, NSString *search,
+                               NSStringCompareOptions mask, NSRange range, NSLocale *locale) {
+    if (search == nil) {
+        gPBStringPatchCount++;
+        if (gPBStringPatchCount <= 5) {
+            PB_LOG(@"patched nil searchString in %@ (count=%ld)",
+                   NSStringFromClass([self class]), (long)gPBStringPatchCount);
+        }
+        return NSMakeRange(NSNotFound, 0);
+    }
+    if (range.location == NSNotFound) {
+        gPBStringPatchCount++;
+        return NSMakeRange(NSNotFound, 0);
+    }
+    NSUInteger len = [(NSString *)self length];
+    if (range.length > 0 && range.location + range.length > len) {
+        gPBStringPatchCount++;
+        if (gPBStringPatchCount <= 5) {
+            PB_LOG(@"patched bad range %@ (len %lu) in %@",
+                   NSStringFromRange(range), (unsigned long)len, NSStringFromClass([self class]));
+        }
+        range = NSMakeRange(MIN(range.location, len), 0);
+    }
+    return PBOrigRangeOfString ? PBOrigRangeOfString(self, _cmd, search, mask, range, locale)
+                               : NSMakeRange(NSNotFound, 0);
+}
+
+static BOOL PBInstallStringCrashPatch(void) {
+    return PBHookSel([NSString class],
+                     @selector(rangeOfString:options:range:locale:),
+                     (IMP)PBRangeOfString, (IMP *)&PBOrigRangeOfString);
+}
+
 static BOOL PBNativeTryInstall(UIView *anchor, UIViewController *vc) {
     id enabled = PBConfig()[@"NativeInsert"];
     if (enabled && ![enabled boolValue]) return NO;
@@ -1818,12 +1866,14 @@ __attribute__((constructor)) static void PBInit(void) {
             method_setImplementation(m2, (IMP)PBViewWillAppear);
         }
 
-        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@)",
-               @"2025-10-21-r12",
+        BOOL stringPatched = PBInstallStringCrashPatch();
+
+        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d)",
+               @"2025-10-21-r14",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
-               PBCurrentLanguage());
+               PBCurrentLanguage(), stringPatched);
         PB_LOG(@"env: ios=%@ screen=%@ app=%@ (%@) log=%@",
                [[UIDevice currentDevice] systemVersion],
                NSStringFromCGRect([UIScreen mainScreen].bounds),
