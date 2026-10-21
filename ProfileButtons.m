@@ -794,24 +794,32 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
 // ---------------------------------------------------------------------------
 
 static const char kPBNativeRowKey;
+static const char kPBNativeOrigFramesKey;
 
 static __weak UIViewController *gPBNativeVC;
+static __weak UICollectionView *gPBNativeCV;   // 只对这一个 collection view 生效
 static NSIndexPath *gPBActionBarIndexPath;
 static CGFloat gPBNativeDelta;
-static CGFloat gPBHeaderBaseHeight;
 static BOOL gPBNativeHooked;
+static BOOL gPBInNativeHook;
 
 static NSArray *(*PBOrigLayoutList)(id, SEL, CGRect);
 static UICollectionViewLayoutAttributes *(*PBOrigLayoutOne)(id, SEL, NSIndexPath *);
 static CGSize (*PBOrigLayoutSize)(id, SEL);
 static void (*PBOrigCellLayout)(id, SEL);
 static void (*PBOrigCellApplyAttrs)(id, SEL, UICollectionViewLayoutAttributes *);
-static void (*PBOrigHeaderLayout)(id, SEL);
 
 static BOOL PBNativeActive(void) {
     if (!gPBNativeHooked || gPBNativeDelta <= 0.0 || !gPBActionBarIndexPath) return NO;
     UIViewController *vc = gPBNativeVC;
-    return vc != nil && vc.view.window != nil;
+    UICollectionView *cv = gPBNativeCV;
+    return vc != nil && cv != nil && vc.view.window != nil;
+}
+
+// layout 是共享类（IGListCollectionViewLayout），必须只处理我们那个 header collection view
+static BOOL PBLayoutIsOurs(id layout) {
+    if (![layout isKindOfClass:[UICollectionViewLayout class]]) return NO;
+    return [(UICollectionViewLayout *)layout collectionView] == gPBNativeCV;
 }
 
 static BOOL PBClassHasOwnMethod(Class cls, SEL sel) {
@@ -865,18 +873,23 @@ static void PBAdjustAttributes(NSArray<UICollectionViewLayoutAttributes *> *attr
 
 static NSArray *PBLayoutList(id self, SEL _cmd, CGRect rect) {
     NSArray *arr = PBOrigLayoutList ? PBOrigLayoutList(self, _cmd, rect) : nil;
-    if (PBNativeActive()) PBAdjustAttributes(arr);
+    if (gPBInNativeHook || !PBNativeActive() || !PBLayoutIsOurs(self)) return arr;
+    gPBInNativeHook = YES;
+    PBAdjustAttributes(arr);
+    gPBInNativeHook = NO;
     return arr;
 }
 
 static UICollectionViewLayoutAttributes *PBLayoutOne(id self, SEL _cmd, NSIndexPath *ip) {
     UICollectionViewLayoutAttributes *a = PBOrigLayoutOne ? PBOrigLayoutOne(self, _cmd, ip) : nil;
-    if (!PBNativeActive() || !a) return a;
+    if (!a || gPBInNativeHook || !PBNativeActive() || !PBLayoutIsOurs(self)) return a;
     if ([ip isEqual:gPBActionBarIndexPath]) {
         a.frame = CGRectMake(a.frame.origin.x, a.frame.origin.y,
                              a.frame.size.width, a.frame.size.height + gPBNativeDelta);
     } else if (a.representedElementCategory == UICollectionElementCategoryCell && PBOrigLayoutOne) {
+        gPBInNativeHook = YES;
         UICollectionViewLayoutAttributes *bar = PBOrigLayoutOne(self, _cmd, gPBActionBarIndexPath);
+        gPBInNativeHook = NO;
         if (bar && a.frame.origin.y >= bar.frame.origin.y - 0.5) {
             a.frame = CGRectOffset(a.frame, 0, gPBNativeDelta);
         }
@@ -886,24 +899,30 @@ static UICollectionViewLayoutAttributes *PBLayoutOne(id self, SEL _cmd, NSIndexP
 
 static CGSize PBLayoutSize(id self, SEL _cmd) {
     CGSize s = PBOrigLayoutSize ? PBOrigLayoutSize(self, _cmd) : CGSizeZero;
-    if (PBNativeActive()) s.height += gPBNativeDelta;
+    if (gPBInNativeHook || !PBNativeActive() || !PBLayoutIsOurs(self)) return s;
+    s.height += gPBNativeDelta;
     return s;
 }
 
 static void PBCellApplyAttrs(id self, SEL _cmd, UICollectionViewLayoutAttributes *attr) {
     if (PBOrigCellApplyAttrs) PBOrigCellApplyAttrs(self, _cmd, attr);
+    UIView *cell = (UIView *)self;
+    if (!PBNativeActive() || cell.superview != gPBNativeCV) return;
     if (attr.indexPath) gPBActionBarIndexPath = attr.indexPath;
 }
 
 static void PBCellLayout(id self, SEL _cmd) {
     if (PBOrigCellLayout) PBOrigCellLayout(self, _cmd);
-    if (!PBNativeActive()) return;
+    if (gPBInNativeHook || !PBNativeActive()) return;
 
     UIView *cell = (UIView *)self;
-    UIViewController *vc = gPBNativeVC;
-    if (!vc || ![cell isDescendantOfView:vc.view]) return;
+    if (cell.superview != gPBNativeCV) return;
 
     UIView *content = [(UICollectionViewCell *)cell contentView] ?: cell;
+    if (content.bounds.size.width < 1.0) return;
+
+    gPBInNativeHook = YES;
+
     UIView *row = objc_getAssociatedObject(cell, &kPBNativeRowKey);
     if (!row) {
         row = PBMakeRow();
@@ -912,22 +931,28 @@ static void PBCellLayout(id self, SEL _cmd) {
         objc_setAssociatedObject(cell, &kPBNativeRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         PB_LOG(@"native: row added to cell %@", NSStringFromClass([cell class]));
     }
-    CGFloat delta = gPBNativeDelta;
-    row.frame = CGRectMake(0, 0, content.bounds.size.width, delta - 6.0);
+
+    // 记录每个子视图的原始 frame，之后每次都按「原始 + delta」摆放：
+    // 这样不会每帧叠加偏移（那会导致内容一直往下爬 + 反复触发布局）。
+    NSMutableDictionary<NSString *, NSValue *> *originals =
+        objc_getAssociatedObject(cell, &kPBNativeOrigFramesKey);
+    if (!originals) originals = [NSMutableDictionary dictionary];
     for (UIView *v in content.subviews) {
         if (v == row) continue;
-        v.frame = CGRectOffset(v.frame, 0, delta);
+        NSString *key = [NSString stringWithFormat:@"%p", v];
+        NSValue *stored = originals[key];
+        if (!stored) {
+            stored = [NSValue valueWithCGRect:v.frame];
+            originals[key] = stored;
+        }
+        CGRect f = stored.CGRectValue;
+        v.frame = CGRectMake(f.origin.x, f.origin.y + gPBNativeDelta, f.size.width, f.size.height);
     }
-}
+    objc_setAssociatedObject(cell, &kPBNativeOrigFramesKey, originals, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-static void PBHeaderLayout(id self, SEL _cmd) {
-    if (PBOrigHeaderLayout) PBOrigHeaderLayout(self, _cmd);
-    if (!PBNativeActive() || gPBHeaderBaseHeight <= 0.0) return;
-    UIView *header = (UIView *)self;
-    CGFloat target = gPBHeaderBaseHeight + gPBNativeDelta;
-    if (fabs(header.frame.size.height - target) < 0.5) return;
-    CGRect f = header.frame;
-    header.frame = CGRectMake(f.origin.x, f.origin.y, f.size.width, target);
+    row.frame = CGRectMake(0, 0, content.bounds.size.width, gPBNativeDelta - 6.0);
+
+    gPBInNativeHook = NO;
 }
 
 static BOOL PBNativeTryInstall(UIView *anchor, UIViewController *vc) {
@@ -959,13 +984,12 @@ static BOOL PBNativeTryInstall(UIView *anchor, UIViewController *vc) {
     if (!header) return NO;
 
     gPBNativeVC = vc;
+    gPBNativeCV = cv;
     gPBNativeDelta = PBRowHeight() + 6.0;
     gPBActionBarIndexPath = ip;
-    gPBHeaderBaseHeight = header.bounds.size.height;
 
     Class layoutClass = [cv.collectionViewLayout class];
     Class cellClass = [cell class];
-    Class headerClass = [header class];
 
     BOOL ok = YES;
     ok = ok && PBHookSel(layoutClass, @selector(layoutAttributesForElementsInRect:), (IMP)PBLayoutList, (IMP *)&PBOrigLayoutList);
@@ -973,14 +997,13 @@ static BOOL PBNativeTryInstall(UIView *anchor, UIViewController *vc) {
     ok = ok && PBHookSel(layoutClass, @selector(collectionViewContentSize), (IMP)PBLayoutSize, (IMP *)&PBOrigLayoutSize);
     ok = ok && PBHookSel(cellClass, @selector(layoutSubviews), (IMP)PBCellLayout, (IMP *)&PBOrigCellLayout);
     ok = ok && PBHookSel(cellClass, @selector(applyLayoutAttributes:), (IMP)PBCellApplyAttrs, (IMP *)&PBOrigCellApplyAttrs);
-    ok = ok && PBHookSel(headerClass, @selector(layoutSubviews), (IMP)PBHeaderLayout, (IMP *)&PBOrigHeaderLayout);
     if (!ok) {
         PB_LOG(@"native: hook failed (layout=%@ cell=%@ header=%@)",
-               NSStringFromClass(layoutClass), NSStringFromClass(cellClass), NSStringFromClass(headerClass));
+               NSStringFromClass(layoutClass), NSStringFromClass(cellClass), NSStringFromClass([header class]));
         return NO;
     }
 
-    // header 高度 +delta：先试约束，再靠 PBHeaderLayout 兜
+    // header 高度 +delta：只改约束（不要在 header 的 layoutSubviews 里改 frame，会无限递归布局）
     BOOL grew = NO;
     UIView *parent = header.superview;
     for (NSLayoutConstraint *c in parent.constraints) {
@@ -1504,7 +1527,7 @@ __attribute__((constructor)) static void PBInit(void) {
         }
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d)",
-               @"2025-10-21-r10",
+               @"2025-10-21-r11",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert());
