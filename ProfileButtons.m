@@ -76,16 +76,24 @@ static BOOL PBUseSafariViewController(void) {
 // MARK: - 通用：找 VC / 找视图 / 打印层级
 // ---------------------------------------------------------------------------
 
-static UIViewController *PBTopViewController(void) {
-    UIWindow *keyWindow = nil;
+static UIWindow *PBKeyWindow(void) {
+    // iOS 13+ 多场景：只从 UIWindowScene 取，避免用已弃用的 UIApplication.keyWindow
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if (![scene isKindOfClass:[UIWindowScene class]]) continue;
         for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-            if (w.isKeyWindow) { keyWindow = w; break; }
+            if (w.isKeyWindow) return w;
         }
-        if (keyWindow) break;
     }
-    if (!keyWindow) keyWindow = [UIApplication sharedApplication].keyWindow;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        NSArray<UIWindow *> *windows = ((UIWindowScene *)scene).windows;
+        if (windows.count) return windows.firstObject;
+    }
+    return nil;
+}
+
+static UIViewController *PBTopViewController(void) {
+    UIWindow *keyWindow = PBKeyWindow();
 
     UIViewController *vc = keyWindow.rootViewController;
     while (YES) {
