@@ -101,13 +101,30 @@ static NSArray<NSDictionary *> *PBRemoteButtons(void);
 static NSArray<NSDictionary *> *PBDefaultButtonsResolved(void);
 static NSArray<NSDictionary *> *PBButtonConfigs(void);
 
-// 找不到 accessibilityIdentifier 时的兜底文字匹配（多语言）
+// 找不到 accessibilityIdentifier 时的兜底文字匹配（覆盖 IG 支持的常见语言）
 static NSArray<NSString *> *PBEditTitles(void) {
     return @[
         @"编辑主页", @"編輯主頁", @"编辑个人主页", @"編輯個人主頁",
         @"Edit profile", @"Edit Profile", @"Modifier le profil",
         @"Editar perfil", @"プロフィールを編集", @"프로필 편집",
         @"Profil bearbeiten", @"Modifica profilo",
+        @"Редактировать профиль", @"تعديل الملف الشخصي", @"Profili düzenle",
+        @"Edit Profil", @"แก้ไขโปรไฟล์", @"Chỉnh sửa trang cá nhân",
+        @"प्रोफ़ाइल संपादित करें", @"Редагувати профіль", @"Edytuj profil",
+        @"Profiel bewerken", @"Editează profilul", @"Profil szerkesztése",
+        @"Upravit profil", @"Επεξεργασία προφίλ", @"Redigera profil",
+        @"Rediger profil", @"Muokkaa profiilia", @"Rediger profil",
+        @"সংশোধন প্রোফাইল", @"প্রোফাইল সম্পাদনা করুন", @"ப்ரொஃபைலைத் திருத்து",
+        @"ప్రొఫైల్ను సవరించండి", @"पार्श्वचित्र संपादित करा", @"સંપાદિત પ્રોફાઇલ",
+        @"ಪ್ರೊಫೈಲ್ ಸಂಪಾದಿಸಿ", @"പ്രൊഫൈൽ എഡിറ്റ് ചെയ്യുക", @"ਪ੍ਰੋਫ਼ਾਈਲ ਸੋਧੋ",
+        @"پروفائل میں ترمیم کریں", @"ویرایش پروفایل", @"עריכת הפרופיל",
+        @"Profili redaktə et", @"Профильді өңдеу", @"Profilni tahrirlash",
+        @"პროფილის რედაქტირება", @"Խմբագրել պրոֆիլը", @"Уреди профил",
+        @"Uredi profil", @"Uredi profil", @"Upraviť profil", @"Редактиране на профила",
+        @"Redaguoti profilį", @"Rediģēt profilu", @"Muuda profiili",
+        @"កែសម្រួលប្រវត្តិរូប", @"ແກ້ໄຂໂປຣໄຟລ໌", @"ပရိုဖိုင်ကို တည်းဖြတ်ရန်",
+        @"පැතිකඩ සංස්කරණය කරන්න", @"प्रोफाइल सम्पादन गर्नुहोस्", @"Hariri wasifu",
+        @"I-edit ang profile", @"Edytuj profil",
     ];
 }
 
@@ -125,6 +142,17 @@ static NSArray<NSDictionary *> *PBDefaultButtons(void) {
                @"ru": @"Центр магазина", @"ar": @"مركز المتجر", @"th": @"ศูนย์ร้านค้า",
                @"vi": @"Trung tâm cửa hàng", @"id": @"Pusat toko", @"tr": @"Mağaza merkezi",
                @"it": @"Centro del negozio",
+               @"pl": @"Centrum sklepu", @"nl": @"Winkelcentrum", @"uk": @"Центр магазину",
+               @"ro": @"Centrul magazinului", @"hu": @"Áruház", @"cs": @"Centrum obchodu",
+               @"el": @"Κέντρο καταστήματος", @"sv": @"Butikscenter", @"da": @"Butikscenter",
+               @"fi": @"Kaupan keskus", @"no": @"Butikksenter", @"ms": @"Pusat kedai",
+               @"hi": @"स्टोर केंद्र", @"bn": @"স্টোর সেন্টার", @"ta": @"ஸ்டோர் மையம்",
+               @"te": @"స్టోర్ సెంటర్", @"ur": @"اسٹور سینٹر", @"fa": @"مرکز فروشگاه",
+               @"he": @"מרכז החנות", @"bg": @"Център на магазина", @"sk": @"Centrum obchodu",
+               @"sr": @"Центар продавнице", @"hr": @"Centar trgovine", @"lt": @"Parduotuvės centras",
+               @"lv": @"Veikala centrs", @"et": @"Poe keskus", @"kk": @"Дүкен орталығы",
+               @"az": @"Mağaza mərkəzi", @"hy": @"Խանութի կենտրոն", @"ka": @"მაღაზიის ცენტრი",
+               @"sw": @"Kituo cha duka", @"fil": @"Sentro ng tindahan",
            } },
         @{ @"id": @"showcase",
            @"Icon": @"bag",
@@ -136,6 +164,17 @@ static NSArray<NSDictionary *> *PBDefaultButtons(void) {
                @"ru": @"Витрина", @"ar": @"واجهة المنتجات", @"th": @"โชว์เคส",
                @"vi": @"Trưng bày", @"id": @"Etalase", @"tr": @"Vitrin",
                @"it": @"Vetrina",
+               @"pl": @"Witryna produktów", @"nl": @"Etalage", @"uk": @"Вітрина",
+               @"ro": @"Vitrină", @"hu": @"Kirakat", @"cs": @"Výloha",
+               @"el": @"Βιτρίνα", @"sv": @"Skyltfönster", @"da": @"Udstillingsvindue",
+               @"fi": @"Näyteikkuna", @"no": @"Utstillingsvindu", @"ms": @"Pameran",
+               @"hi": @"उत्पाद शोकेस", @"bn": @"পণ্য শোকেস", @"ta": @"தயாரிப்பு காட்சி",
+               @"te": @"ఉత్పత్తి షోకేస్", @"ur": @"پروڈکٹ شوکیس", @"fa": @"ویترین محصولات",
+               @"he": @"חלון ראווה", @"bg": @"Витрина", @"sk": @"Vitrína",
+               @"sr": @"Излог", @"hr": @"Izlog", @"lt": @"Vitrina", @"lv": @"Skatlogs",
+               @"et": @"Vaateaken", @"kk": @"Өнім витринасы", @"az": @"Məhsul vitrini",
+               @"hy": @"Ապրանքների ցուցափեղկ", @"ka": @"პროდუქტის ვიტრინა",
+               @"sw": @"Maonyesho ya bidhaa", @"fil": @"Showcase ng produkto",
            } },
         @{ @"id": @"orders",
            @"Icon": @"doc.text",
@@ -147,6 +186,18 @@ static NSArray<NSDictionary *> *PBDefaultButtons(void) {
                @"ru": @"Детали заказа", @"ar": @"تفاصيل الطلب", @"th": @"รายละเอียดคำสั่งซื้อ",
                @"vi": @"Chi tiết đơn hàng", @"id": @"Detail pesanan", @"tr": @"Sipariş detayları",
                @"it": @"Dettagli ordine",
+               @"pl": @"Szczegóły zamówienia", @"nl": @"Bestelgegevens", @"uk": @"Деталі замовлення",
+               @"ro": @"Detalii comandă", @"hu": @"Rendelés részletei", @"cs": @"Podrobnosti objednávky",
+               @"el": @"Λεπτομέρειες παραγγελίας", @"sv": @"Orderdetaljer", @"da": @"Ordredetaljer",
+               @"fi": @"Tilauksen tiedot", @"no": @"Ordredetaljer", @"ms": @"Butiran pesanan",
+               @"hi": @"ऑर्डर विवरण", @"bn": @"অর্ডার বিবরণ", @"ta": @"ஆர்டர் விவரங்கள்",
+               @"te": @"ఆర్డర్ వివరాలు", @"ur": @"آرڈر کی تفصیلات", @"fa": @"جزئیات سفارش",
+               @"he": @"פרטי הזמנה", @"bg": @"Детайли на поръчка", @"sk": @"Podrobnosti objednávky",
+               @"sr": @"Детаљи поруџбине", @"hr": @"Detalji narudžbe", @"lt": @"Užsakymo informacija",
+               @"lv": @"Pasūtījuma informācija", @"et": @"Tellimuse üksikasjad",
+               @"kk": @"Тапсырыс мәліметтері", @"az": @"Sifariş detalları",
+               @"hy": @"Պատվերի մանրամասներ", @"ka": @"შეკვეთის დეტალები",
+               @"sw": @"Maelezo ya agizo", @"fil": @"Detalye ng order",
            } },
     ];
 }
@@ -543,7 +594,35 @@ static BOOL PBViewInsideChrome(UIView *v, UIView *root) {
 
 // 收集所有候选，挑「最靠下、可点、尺寸正常」的那个：
 // 个人主页里的「编辑主页」在简介下面，不会被导航栏里的同名元素或隐藏的旧 header 抢走。
-static UIView *PBFindEditProfileAnchor(UIView *root) {
+// 1 = 自己的主页，0 = 别人的主页，-1 = 判断不出来
+static int PBSelfProfileState(UIViewController *vc) {
+    if (!vc) return -1;
+    @try {
+        id user = nil;
+        if ([vc respondsToSelector:@selector(valueForKey:)]) {
+            user = [vc valueForKey:@"user"];
+        }
+        if (user && user != [NSNull null]) {
+            for (NSString *key in @[@"isSelfProfile", @"isSelf", @"isCurrentUser", @"isLoggedInUser"]) {
+                SEL sel = NSSelectorFromString(key);
+                if (![user respondsToSelector:sel]) continue;
+                id v = [user valueForKey:key];
+                if ([v isKindOfClass:[NSNumber class]]) return [v boolValue] ? 1 : 0;
+            }
+        }
+        for (NSString *key in @[@"isSelfProfile", @"isViewingSelf"]) {
+            SEL sel = NSSelectorFromString(key);
+            if (![vc respondsToSelector:sel]) continue;
+            id v = [vc valueForKey:key];
+            if ([v isKindOfClass:[NSNumber class]]) return [v boolValue] ? 1 : 0;
+        }
+    } @catch (NSException *e) {
+        PB_LOG(@"self detect caught: %@", e.reason);
+    }
+    return -1;
+}
+
+static UIView *PBFindEditProfileAnchor(UIView *root, BOOL allowActionBarFallback) {
     if (!root) return nil;
 
     NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
@@ -599,6 +678,32 @@ static UIView *PBFindEditProfileAnchor(UIView *root) {
         }
 
         [queue addObjectsFromArray:v.subviews];
+    }
+
+    // 文字/标识都没匹配到（例如系统语言不在我们的列表里），
+    // 但对「自己的主页」有兜底：直接拿 action bar 容器当锚点，与语言无关。
+    if (!best && allowActionBarFallback) {
+        UIView *bar = nil;
+        NSMutableArray<UIView *> *q2 = [NSMutableArray arrayWithObject:root];
+        NSInteger v2 = 0;
+        while (q2.count > 0 && v2 < 12000) {
+            UIView *v = q2.firstObject;
+            [q2 removeObjectAtIndex:0];
+            v2++;
+            NSString *cls = NSStringFromClass([v class]);
+            if ([cls containsString:@"IGProfileActionBarView"] &&
+                ![cls containsString:@"Cell"] &&
+                v.bounds.size.width > 120.0 && v.bounds.size.height > 10.0 &&
+                CGRectIntersectsRect([v convertRect:v.bounds toView:root], root.bounds)) {
+                bar = v;
+                break;
+            }
+            [q2 addObjectsFromArray:v.subviews];
+        }
+        if (bar) {
+            best = bar;
+            PB_LOG(@"anchor fallback: action bar %@", NSStringFromClass([bar class]));
+        }
     }
 
     if (PBDebug() && best) {
@@ -1343,6 +1448,34 @@ static BOOL PBTextLooksLikeBetaNag(NSString *text) {
     return YES;
 }
 
+// RyukGram 自己的「v1.4.x 更新」弹窗
+static BOOL PBTextLooksLikeRyukNag(NSString *text) {
+    if (![text isKindOfClass:[NSString class]] || text.length == 0) return NO;
+    NSString *lower = [text lowercaseString];
+    if ([lower containsString:@"ryukgram"] == NO) return NO;
+    NSArray<NSString *> *words = @[
+        @"update", @"upgrade", @"new version", @"available",
+        @"更新", @"新版本", @"升級", @"升级",
+    ];
+    for (NSString *w in words) {
+        if ([lower containsString:w]) return YES;
+    }
+    return NO;
+}
+
+// RyukGram 的几个开关（写 NSUserDefaults 即可生效）
+static void PBApplyRyukDefaults(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    // RyukGram 自带「隐藏 TestFlight / Beta 更新弹窗」
+    [defaults setBool:YES forKey:@"hide_testflight_nag"];
+    // 关掉登录页悬浮的 Device ID 按钮（设备伪装功能里的展示开关）
+    [defaults setBool:NO forKey:@"ryg_devicespoof_login_button"];
+    // 把 RyukGram 自己的更新提醒 snooze 到 2100 年
+    [defaults setDouble:4102444800.0 forKey:@"ryg_update_snooze_until_ts"];
+    [defaults synchronize];
+    PB_LOG(@"ryuk: testflight nag hidden, device-id button off, update snoozed");
+}
+
 typedef void (*PBPresentIMP)(id, SEL, UIViewController *, BOOL, void (^)(void));
 static PBPresentIMP PBOrigPresent;
 
@@ -1350,8 +1483,8 @@ static void PBPresent(id self, SEL _cmd, UIViewController *vc, BOOL animated, vo
     @try {
         if (vc && PBSuppressBetaNagEnabled() && PBViewLooksLikeDialog(vc)) {
             NSString *text = PBDialogText(vc);
-            if (PBTextLooksLikeBetaNag(text)) {
-                PB_LOG(@"suppressed beta nag: %@ | %@", NSStringFromClass([vc class]), text);
+            if (PBTextLooksLikeBetaNag(text) || PBTextLooksLikeRyukNag(text)) {
+                PB_LOG(@"suppressed nag: %@ | %@", NSStringFromClass([vc class]), text);
                 if (completion) completion();
                 return;
             }
@@ -1546,7 +1679,8 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
         _resolver = ^UIView *{
             UIViewController *strongVC = weakVC;
             if (!strongVC || !strongVC.view) return nil;
-            return PBFindEditProfileAnchor(strongVC.view);
+            int state = PBSelfProfileState(strongVC);
+            return PBFindEditProfileAnchor(strongVC.view, state != 0);
         };
     }
     return self;
@@ -1813,7 +1947,12 @@ static void PBInstallForViewController(UIViewController *vc) {
     if (last && now - last.doubleValue < interval) return;
     objc_setAssociatedObject(vc, &kPBLastAttemptKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    UIView *anchor = PBFindEditProfileAnchor(vc.view);
+    int selfState = PBSelfProfileState(vc);
+    if (selfState == 0) {
+        if (PBDebug()) PB_LOG(@"skip: not self profile (%@)", NSStringFromClass([vc class]));
+        return;
+    }
+    UIView *anchor = PBFindEditProfileAnchor(vc.view, selfState != 0);
     if (!anchor) {
         NSUInteger count = fails.unsignedIntegerValue + 1;
         objc_setAssociatedObject(vc, &kPBFailCountKey, @(count), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1981,9 +2120,10 @@ __attribute__((constructor)) static void PBInit(void) {
 
         BOOL stringPatched = PBInstallStringCrashPatch();
         BOOL nagFilter = PBInstallBetaNagFilter();
+        PBApplyRyukDefaults();
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d, nagFilter=%d)",
-               @"2025-10-21-r16",
+               @"2025-10-21-r17",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
