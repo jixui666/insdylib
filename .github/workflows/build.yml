@@ -24,9 +24,20 @@ jobs:
 
       - name: Collect dylib + deb
         run: |
+          set -e
           mkdir -p out
-          cp -v packages/*.deb out/ 2>/dev/null || true
-          find .theos -name 'ProfileButtons.dylib' -print -exec cp -v {} out/ \;
+          cp -v packages/*.deb out/
+          # 从 deb 里解出「真正会被安装的那份」dylib（多架构合并后的产物），
+          # 不要用 find 去拷贝 .theos 中间对象，否则会被单架构产物覆盖。
+          mkdir -p out/_deb
+          for deb in packages/*.deb; do dpkg-deb -x "$deb" out/_deb; done
+          find out/_deb -name 'ProfileButtons.dylib' -exec cp -v {} out/ProfileButtons.dylib \;
+          rm -rf out/_deb
+          echo "--- artifact info ---"
+          file out/ProfileButtons.dylib
+          file out/ProfileButtons.dylib | grep -q "universal binary with 2 architectures" \
+            && echo "OK: fat binary (arm64 + arm64e)" \
+            || echo "WARN: not a fat binary, check Makefile ARCHS"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
