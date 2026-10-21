@@ -9,6 +9,9 @@
 > Sideloadly 用的 `libellekit.dylib` + `sideloadFixerLol.dylib`、以及 `FLEXing.dylib` / `libflex.dylib`），
 > 所以只需要：**写出 dylib → 让 Sideloadly 把它注入进这个 IPA → 重新签名安装**。
 
+> **本工程已提交并构建通过**：<https://github.com/jixui666/insdylib>
+> Actions 产物 `ProfileButtons.dylib`（fat，arm64 + arm64e，只依赖系统框架、不需要 Substrate）
+
 ---
 
 ## 1. 为什么是这个方案
