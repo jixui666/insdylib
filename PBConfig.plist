@@ -63,6 +63,10 @@
     <key>TryHeaderInsert</key>
     <false/>
 
+    <!-- true：布局级插入（把 action bar cell 撑高，行真正长在页面里）；失败会自动退回跟随层 -->
+    <key>NativeInsert</key>
+    <true/>
+
     <!-- 启动 2 秒后弹一个「ProfileButtons 已加载」提示，确认 dylib 真的被加载 -->
     <key>ShowLaunchToast</key>
     <true/>
