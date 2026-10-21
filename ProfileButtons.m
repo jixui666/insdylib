@@ -840,9 +840,12 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
 @property (nonatomic, weak) UIView *anchor;
 @property (nonatomic, weak) UIViewController *vc;
 @property (nonatomic, strong) CADisplayLink *link;
+@property (nonatomic, copy) UIView *(^resolver)(void);   // 锚点失效时重新找
+@property (nonatomic, assign) NSTimeInterval lastResolve;
 - (instancetype)initWithRow:(UIView *)row anchor:(UIView *)anchor vc:(UIViewController *)vc;
 - (void)start;
 - (void)stop;
+- (BOOL)reacquireAnchorIfNeeded;
 @end
 
 @implementation PBRowTracker
@@ -852,6 +855,12 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
         _row = row;
         _anchor = anchor;
         _vc = vc;
+        __weak UIViewController *weakVC = vc;
+        _resolver = ^UIView *{
+            UIViewController *strongVC = weakVC;
+            if (!strongVC || !strongVC.view) return nil;
+            return PBFindEditProfileAnchor(strongVC.view);
+        };
     }
     return self;
 }
@@ -868,22 +877,53 @@ static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, C
     self.link = nil;
 }
 
+// 下拉刷新 / 换账号后 IG 会重建 header 里的按钮，旧 anchor 会被释放，
+// 这里重新扫一遍把 anchor 接上，避免行被「冻」在原地。
+- (BOOL)reacquireAnchorIfNeeded {
+    UIView *anchor = self.anchor;
+    if (anchor && anchor.window != nil) return YES;
+    if (!self.resolver) return NO;
+
+    NSTimeInterval now = CACurrentMediaTime();
+    if (now - self.lastResolve < 0.4) return NO;
+    self.lastResolve = now;
+
+    UIView *found = self.resolver();
+    if (found) {
+        self.anchor = found;
+        PB_LOG(@"anchor re-acquired: %@", NSStringFromClass([found class]));
+        return YES;
+    }
+    return NO;
+}
+
 - (void)tick:(CADisplayLink *)link {
     UIView *row = self.row;
-    UIView *anchor = self.anchor;
     UIViewController *vc = self.vc;
     UIView *host = row.superview;
 
-    if (!row || !anchor || !host || !vc) { [self stop]; return; }
-    if (vc.view.window == nil || anchor.window == nil) {
+    if (!row || !host || !vc) { [self stop]; return; }
+    if (vc.view.window == nil) {
         row.hidden = YES;
         [self stop];          // 页面不可见就停，等下次 viewDidAppear 再重启
         return;
     }
-    if (row.hidden) row.hidden = NO;
-
+    if (![self reacquireAnchorIfNeeded]) {
+        row.hidden = YES;     // 暂时没锚点：先藏起来，等重新找到再显示，别定格在原地
+        return;
+    }
+    UIView *anchor = self.anchor;
     CGFloat h = row.bounds.size.height > 0 ? row.bounds.size.height : PBOverlayHeight();
     CGRect rect = PBRowRectForAnchor(anchor, host);
+    CGFloat rawY = rect.origin.y - PBOverlayGap() - h;
+
+    // 按钮行滚到导航栏下面时，行也跟着“滚出去”，而不是钉在顶部 —— 看起来才像真的在页面里
+    if (rawY < host.safeAreaInsets.top + 2.0) {
+        row.hidden = YES;
+        return;
+    }
+    if (row.hidden) row.hidden = NO;
+
     CGRect f = PBRowFrameAboveRect(rect, host.bounds, host.safeAreaInsets.top, h, PBOverlayGap());
     if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
 }
@@ -914,6 +954,7 @@ static BOOL PBInsertOverlayAbove(UIView *anchor, UIView *row, UIViewController *
     CGFloat rawY = rect.origin.y - gap - h;
     CGRect frame = PBRowFrameAboveRect(rect, vc.view.bounds, vc.view.safeAreaInsets.top, h, gap);
     row.frame = frame;
+    row.hidden = (rawY < vc.view.safeAreaInsets.top + 2.0);
     BOOL clamped = fabs(frame.origin.y - rawY) > 0.5;
 
     PBRowTracker *tracker = [[PBRowTracker alloc] initWithRow:row anchor:anchor vc:vc];
@@ -1028,12 +1069,13 @@ static const char kPBFailCountKey;
 static void PBInstallForViewController(UIViewController *vc) {
     if (!vc.view || vc.view.window == nil) return;
 
-    // 已经装过且还在视图树上 → 恢复跟随（重叠层可能被隐藏过）
+    // 已经装过且还在视图树上 → 恢复跟随（重叠层可能被隐藏过，锚点也可能被 IG 换掉）
     UIView *existing = objc_getAssociatedObject(vc, &kPBInstalledRowKey);
     if (existing && existing.window != nil) {
         PBRowTracker *tracker = objc_getAssociatedObject(vc, &kPBTrackerKey);
         if (tracker) {
             existing.hidden = NO;
+            [tracker reacquireAnchorIfNeeded];
             [tracker start];
         }
         return;
@@ -1166,7 +1208,7 @@ __attribute__((constructor)) static void PBInit(void) {
         }
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d)",
-               @"2025-10-21-r6",
+               @"2025-10-21-r7",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert());
