@@ -13,6 +13,7 @@
 #import <UIKit/UIKit.h>
 #import <SafariServices/SafariServices.h>
 #import <WebKit/WebKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
 #define PB_LOG(fmt, ...) NSLog(@"[ProfileButtons] " fmt, ##__VA_ARGS__)
@@ -24,6 +25,8 @@
 static NSString *const PBRowIdentifier = @"pb_profile_buttons_row";
 static NSString *const PBConfigName   = @"PBConfig";       // App 包内 PBConfig.plist
 static const NSInteger PBRowTag       = 0x5042;            // 'PB'
+
+static const char kPBTrackerKey;
 
 // 找不到 accessibilityIdentifier 时的兜底文字匹配（多语言）
 static NSArray<NSString *> *PBEditTitles(void) {
@@ -92,6 +95,21 @@ static BOOL PBShouldShowLaunchToast(void) {
     id v = PBConfig()[@"ShowLaunchToast"];
     if (v) return [v boolValue];
     return PBDebug();
+}
+
+static CGFloat PBRowHeight(void) {
+    id v = PBConfig()[@"RowHeight"];
+    return v ? [v doubleValue] : 36.0;
+}
+
+static CGFloat PBOverlayHeight(void) {
+    id v = PBConfig()[@"OverlayHeight"];
+    return v ? [v doubleValue] : 28.0;
+}
+
+static CGFloat PBOverlayGap(void) {
+    id v = PBConfig()[@"OverlayGap"];
+    return v ? [v doubleValue] : 4.0;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +466,6 @@ static UIView *PBMakeRow(void) {
         if (![cfg isKindOfClass:[NSDictionary class]]) continue;
         [row addArrangedSubview:PBMakeButton(cfg)];
     }
-    [row.heightAnchor constraintEqualToConstant:36.0].active = YES;
     return row;
 }
 
@@ -479,6 +496,7 @@ static BOOL PBInsertIntoVerticalStack(UIView *anchor, UIView *row) {
         NSInteger idx = PBArrangedIndexForView(stack, anchor);
         if (idx != NSNotFound) {
             NSUInteger insertAt = above ? (NSUInteger)idx : (NSUInteger)(idx + 1);
+            [row.heightAnchor constraintEqualToConstant:PBRowHeight()].active = YES;
             [stack insertArrangedSubview:row atIndex:insertAt];
             PB_LOG(@"inserted into vertical stack %@ at index %lu (%@)",
                    NSStringFromClass([stack class]), (unsigned long)insertAt,
@@ -516,10 +534,11 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
     if (!rowContainer || !parent) return NO;
 
     const CGFloat spacing = 8.0;
-    const CGFloat height  = 36.0;
+    const CGFloat height  = PBRowHeight();
     const CGFloat delta   = height + spacing;
     BOOL above = PBPositionAbove();
 
+    [row.heightAnchor constraintEqualToConstant:height].active = YES;
     [parent addSubview:row];
     if (above) {
         [NSLayoutConstraint activateConstraints:@[
@@ -570,9 +589,113 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
     return YES;
 }
 
+// ---------------------------------------------------------------------------
+// 方案 D：跟随按钮行位置的重叠层
+// 不依赖 StackView / 约束，直接贴在「编辑主页 / 分享主页」这一行的上方一点点；
+// 每次布局后重新贴位置，所以手写 frame 布局的 header 也能用。
+// ---------------------------------------------------------------------------
+
+@interface PBRowTracker : NSObject
+@property (nonatomic, weak) UIView *row;
+@property (nonatomic, weak) UIView *alignView;
+@property (nonatomic, weak) UIViewController *vc;
+@property (nonatomic, strong) CADisplayLink *link;
+- (instancetype)initWithRow:(UIView *)row alignView:(UIView *)alignView vc:(UIViewController *)vc;
+- (void)start;
+- (void)stop;
+@end
+
+@implementation PBRowTracker
+
+- (instancetype)initWithRow:(UIView *)row alignView:(UIView *)alignView vc:(UIViewController *)vc {
+    if (self = [super init]) {
+        _row = row;
+        _alignView = alignView;
+        _vc = vc;
+    }
+    return self;
+}
+
+- (void)start {
+    if (self.link) return;
+    self.link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
+    self.link.preferredFramesPerSecond = 30;
+    [self.link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)stop {
+    [self.link invalidate];
+    self.link = nil;
+}
+
+- (void)tick:(CADisplayLink *)link {
+    UIView *row = self.row;
+    UIView *align = self.alignView;
+    UIViewController *vc = self.vc;
+    UIView *host = row.superview;
+
+    if (!row || !align || !host || !vc) { [self stop]; return; }
+    if (vc.view.window == nil || align.window == nil) {
+        row.hidden = YES;
+        [self stop];          // 页面不可见就停，等下次 viewDidAppear 再重启
+        return;
+    }
+    if (row.hidden) row.hidden = NO;
+
+    CGRect a = [align convertRect:align.bounds toView:host];
+    CGFloat h = row.bounds.size.height > 0 ? row.bounds.size.height : PBOverlayHeight();
+    CGFloat gap = PBOverlayGap();
+    CGRect f = CGRectMake(a.origin.x, a.origin.y - gap - h, a.size.width, h);
+
+    CGFloat maxY = MAX(0.0, host.bounds.size.height - h);
+    if (f.origin.y > maxY) f.origin.y = maxY;
+    if (f.origin.y < 0.0) f.origin.y = 0.0;
+    if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
+}
+
+@end
+
+// 去掉行上已有/冲突的高度约束（切到手动 frame 模式前必须清掉）
+static void PBRemoveRowHeightConstraints(UIView *row) {
+    NSMutableArray<NSLayoutConstraint *> *toRemove = [NSMutableArray array];
+    for (NSLayoutConstraint *c in row.constraints) {
+        if (c.firstItem == row && c.firstAttribute == NSLayoutAttributeHeight) {
+            [toRemove addObject:c];
+        }
+    }
+    for (NSLayoutConstraint *c in toRemove) [row removeConstraint:c];
+}
+
+static BOOL PBInsertOverlayAbove(UIView *anchor, UIView *row, UIViewController *vc) {
+    UIView *align = anchor.superview ?: anchor;
+    UIView *host = align;
+    while (host && [host isKindOfClass:[UIStackView class]]) host = host.superview;
+    if (!host || host == row) return NO;
+
+    PBRemoveRowHeightConstraints(row);
+    row.translatesAutoresizingMaskIntoConstraints = YES;
+    [host addSubview:row];
+
+    CGRect a = [align convertRect:align.bounds toView:host];
+    CGFloat h = PBOverlayHeight();
+    CGFloat gap = PBOverlayGap();
+    row.frame = CGRectMake(a.origin.x, a.origin.y - gap - h, a.size.width, h);
+
+    PBRowTracker *tracker = [[PBRowTracker alloc] initWithRow:row alignView:align vc:vc];
+    objc_setAssociatedObject(vc, &kPBTrackerKey, tracker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [tracker start];
+
+    PB_LOG(@"overlay above %@ in %@ frame=%@",
+           NSStringFromClass([align class]), NSStringFromClass([host class]),
+           NSStringFromCGRect(row.frame));
+    return YES;
+}
+
 // 方案 C（兜底）：贴在主页顶部（安全区下方）或底部，保证一定能看到
 static void PBDockToViewController(UIViewController *vc, UIView *row) {
     BOOL above = PBPositionAbove();
+    PBRemoveRowHeightConstraints(row);
+    [row.heightAnchor constraintEqualToConstant:PBRowHeight()].active = YES;
     [vc.view addSubview:row];
     if (above) {
         [NSLayoutConstraint activateConstraints:@[
@@ -663,9 +786,16 @@ static const char kPBFailCountKey;
 static void PBInstallForViewController(UIViewController *vc) {
     if (!vc.view || vc.view.window == nil) return;
 
-    // 已经装过且还在视图树上 → 直接返回
+    // 已经装过且还在视图树上 → 恢复跟随（重叠层可能被隐藏过）
     UIView *existing = objc_getAssociatedObject(vc, &kPBInstalledRowKey);
-    if (existing && existing.window != nil) return;
+    if (existing && existing.window != nil) {
+        PBRowTracker *tracker = objc_getAssociatedObject(vc, &kPBTrackerKey);
+        if (tracker) {
+            existing.hidden = NO;
+            [tracker start];
+        }
+        return;
+    }
 
     // ForceDock：跳过头部插入，直接悬浮，保证可见
     if (PBForceDock()) {
@@ -706,15 +836,22 @@ static void PBInstallForViewController(UIViewController *vc) {
     PBDumpAncestors(anchor, "anchor");
 
     UIView *row = PBMakeRow();
-    BOOL inHeader = PBInsertIntoVerticalStack(anchor, row);
-    if (!inHeader) inHeader = PBInsertRelativeToContainer(anchor, row);
-    if (!inHeader) PBDockToViewController(vc, row);
+    NSString *mode = @"docked";
+    if (PBInsertIntoVerticalStack(anchor, row)) {
+        mode = @"in header (stack)";
+    } else if (PBInsertRelativeToContainer(anchor, row)) {
+        mode = @"in header (constraints)";
+    } else if (PBInsertOverlayAbove(anchor, row, vc)) {
+        mode = @"overlay above buttons";
+    } else {
+        PBDockToViewController(vc, row);
+    }
+    BOOL inHeader = ![mode isEqualToString:@"docked"];
 
     objc_setAssociatedObject(vc, &kPBInstalledRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     PB_LOG(@"installed %lu button(s) %@ edit-profile row (%@)",
            (unsigned long)PBButtonConfigs().count,
-           PBPositionAbove() ? @"above" : @"below",
-           inHeader ? @"in header" : @"docked");
+           PBPositionAbove() ? @"above" : @"below", mode);
 
     // 关键：插进 header 后确认真的看得见，看不见就退回悬浮
     if (inHeader) {
@@ -730,6 +867,9 @@ static void PBInstallForViewController(UIViewController *vc) {
             PB_LOG(@"row not visible after install (frame in VC: %@, superview %@) — docking instead",
                    NSStringFromCGRect(inVC), NSStringFromClass([strongRow.superview class]));
             if (PBDebug()) PBDumpAncestors(strongRow, "invisible-row");
+            PBRowTracker *tracker = objc_getAssociatedObject(strongVC, &kPBTrackerKey);
+            [tracker stop];
+            objc_setAssociatedObject(strongVC, &kPBTrackerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [strongRow removeFromSuperview];
             PBDockToViewController(strongVC, strongRow);
             objc_setAssociatedObject(strongVC, &kPBInstalledRowKey, strongRow, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -774,7 +914,7 @@ __attribute__((constructor)) static void PBInit(void) {
         }
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d)",
-               @"2025-10-21-r3",
+               @"2025-10-21-r4",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock());

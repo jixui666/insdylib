@@ -51,6 +51,14 @@
     <key>ForceDock</key>
     <false/>
 
+    <!-- 按钮行尺寸（pt）：贴按钮上方时的行高 / 与按钮行的间距 -->
+    <key>RowHeight</key>
+    <real>36</real>
+    <key>OverlayHeight</key>
+    <real>28</real>
+    <key>OverlayGap</key>
+    <real>4</real>
+
     <!-- 启动 2 秒后弹一个「ProfileButtons 已加载」提示，确认 dylib 真的被加载 -->
     <key>ShowLaunchToast</key>
     <true/>
