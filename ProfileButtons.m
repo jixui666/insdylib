@@ -16,7 +16,69 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
-#define PB_LOG(fmt, ...) NSLog(@"[ProfileButtons] " fmt, ##__VA_ARGS__)
+// ---------------------------------------------------------------------------
+// MARK: - 日志：同时写 NSLog 和 app 沙盒 Documents/ProfileButtons.log
+// ---------------------------------------------------------------------------
+
+static NSString *PBLogFilePath(void) {
+    static NSString *path;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        if (docs.length == 0) docs = NSTemporaryDirectory();
+        path = [docs stringByAppendingPathComponent:@"ProfileButtons.log"];
+    });
+    return path;
+}
+
+static void PBLogWrite(NSString *message) {
+    static NSDateFormatter *formatter;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        formatter = [[NSDateFormatter alloc] init];
+        formatter.dateFormat = @"MM-dd HH:mm:ss.SSS";
+    });
+
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n",
+                      [formatter stringFromDate:[NSDate date]], message];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (data.length == 0) return;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *path = PBLogFilePath();
+    if (![fm fileExistsAtPath:path]) {
+        [fm createFileAtPath:path contents:[NSData data] attributes:nil];
+    }
+    // 超过 1MB 清空，避免长期使用把沙盒写满
+    NSDictionary *attrs = [fm attributesOfItemAtPath:path error:NULL];
+    if (attrs && [attrs[NSFileSize] unsignedLongLongValue] > (1024ULL * 1024ULL)) {
+        [fm removeItemAtPath:path error:NULL];
+        [fm createFileAtPath:path contents:[NSData data] attributes:nil];
+    }
+
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!handle) return;
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+        [handle synchronizeFile];
+        [handle closeFile];
+    } @catch (NSException *exception) {
+        NSLog(@"[ProfileButtons] log write failed: %@", exception);
+    }
+}
+
+static void PBLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSLog(@"[ProfileButtons] %@", message);
+    PBLogWrite(message);
+}
+
+#define PB_LOG(fmt, ...) PBLog(fmt, ##__VA_ARGS__)
+
 
 // ---------------------------------------------------------------------------
 // MARK: - 常量 / 配置
@@ -256,19 +318,29 @@ static UIView *PBFindEditProfileAnchor(UIView *root) {
         if (matched && !PBViewInsideChrome(v, root)) {
             UIView *anchor = PBTappableAncestor(v) ?: v;
             CGRect r = [anchor convertRect:anchor.bounds toView:root];
-            BOOL usable = r.size.width > 30.0 && r.size.height > 14.0 &&
+            BOOL usable = r.size.width > 30.0 && r.size.height > 14.0 && r.size.height < 90.0 &&
                           !CGRectIsEmpty(r) && anchor.alpha > 0.05 && !anchor.hidden &&
+                          r.origin.y > root.safeAreaInsets.top + 30.0 &&
                           CGRectIntersectsRect(r, root.bounds);
             if (usable) {
-                // 分数：可点 +1000、带 edit_profile 标识 +500、位置越靠下越好
-                CGFloat score = r.origin.y;
-                if ([anchor isKindOfClass:[UIControl class]]) score += 1000.0;
-                if (anchor.gestureRecognizers.count > 0) score += 300.0;
-                if (byIdentifier) score += 500.0;
+                // 位置越靠下越优先（主页里「编辑主页」在简介下面），再叠加可点/标识加成
+                CGFloat score = r.origin.y * 5.0;
+                if ([anchor isKindOfClass:[UIControl class]]) score += 600.0;
+                if (anchor.gestureRecognizers.count > 0) score += 150.0;
+                if (byIdentifier) score += 300.0;
+                if (PBDebug()) {
+                    PB_LOG(@"[anchor] candidate %@ id=%@ rect=%@ score=%.0f",
+                           NSStringFromClass([anchor class]), anchor.accessibilityIdentifier ?: @"-",
+                           NSStringFromCGRect(r), score);
+                }
                 if (score > bestScore) {
                     bestScore = score;
                     best = anchor;
                 }
+            } else if (PBDebug()) {
+                PB_LOG(@"[anchor] rejected %@ id=%@ rect=%@ (size/visibility)",
+                       NSStringFromClass([anchor class]), anchor.accessibilityIdentifier ?: @"-",
+                       NSStringFromCGRect(r));
             }
         }
 
@@ -399,9 +471,62 @@ static void PBDumpTree(UIView *v, NSInteger depth, NSInteger maxDepth) {
 
 static const char kPBURLKey;
 
+// 日志查看器：长按任意自绘按钮打开，可全选复制（不方便取沙盒文件时用）
+@interface PBLogViewController : UIViewController
+@end
+
+@implementation PBLogViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"ProfileButtons 日志";
+    self.view.backgroundColor = [UIColor systemBackgroundColor];
+
+    UITextView *textView = [[UITextView alloc] initWithFrame:CGRectZero];
+    textView.editable = NO;
+    textView.selectable = YES;
+    textView.alwaysBounceVertical = YES;
+    textView.font = [UIFont monospacedSystemFontOfSize:11.0 weight:UIFontWeightRegular];
+    textView.text = [NSString stringWithContentsOfFile:PBLogFilePath()
+                                             encoding:NSUTF8StringEncoding
+                                                error:NULL] ?: @"(日志为空)";
+    textView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:textView];
+    [NSLayoutConstraint activateConstraints:@[
+        [textView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [textView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [textView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [textView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+    ]];
+
+    self.navigationItem.leftBarButtonItem =
+        [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain
+                                        target:self action:@selector(closeTapped:)];
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithTitle:@"复制" style:UIBarButtonItemStylePlain
+                                        target:self action:@selector(copyTapped:)];
+}
+
+- (void)closeTapped:(id)sender {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)copyTapped:(id)sender {
+    NSString *text = [NSString stringWithContentsOfFile:PBLogFilePath()
+                                               encoding:NSUTF8StringEncoding
+                                                  error:NULL];
+    if (text.length) {
+        [UIPasteboard generalPasteboard].string = text;
+        PB_LOG(@"log copied to pasteboard (%lu chars)", (unsigned long)text.length);
+    }
+}
+
+@end
+
 @interface PBButtonActionHandler : NSObject
 + (instancetype)shared;
 - (void)tapButton:(UIButton *)sender;
+- (void)longPressButton:(UILongPressGestureRecognizer *)recognizer;
 @end
 
 @implementation PBButtonActionHandler
@@ -412,6 +537,20 @@ static const char kPBURLKey;
     dispatch_once(&once, ^{ handler = [PBButtonActionHandler new]; });
     return handler;
 }
+
+- (void)longPressButton:(UILongPressGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateBegan) return;
+    if (!PBDebug()) return;
+
+    UIViewController *top = PBTopViewController();
+    if (!top) return;
+    PB_LOG(@"opening log viewer");
+    PBLogViewController *logVC = [[PBLogViewController alloc] initWithNibName:nil bundle:nil];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:logVC];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    [top presentViewController:nav animated:YES completion:nil];
+}
+
 
 - (void)tapButton:(UIButton *)sender {
     NSURL *url = objc_getAssociatedObject(sender, &kPBURLKey);
@@ -489,6 +628,13 @@ static UIButton *PBMakeButton(NSDictionary *cfg) {
     [button addTarget:[PBButtonActionHandler shared]
                action:@selector(tapButton:)
      forControlEvents:UIControlEventTouchUpInside];
+
+    // 长按打开日志查看器（Debug 时可用），不方便取沙盒文件时可以直接复制
+    UILongPressGestureRecognizer *longPress =
+        [[UILongPressGestureRecognizer alloc] initWithTarget:[PBButtonActionHandler shared]
+                                                      action:@selector(longPressButton:)];
+    longPress.minimumPressDuration = 0.6;
+    [button addGestureRecognizer:longPress];
     return button;
 }
 
@@ -635,12 +781,16 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
 // 用坐标换算把行贴在「编辑主页 / 分享主页」这一行的上沿，滚动时每帧跟随。
 // ---------------------------------------------------------------------------
 
-// 按钮行在 host 坐标系里的矩形：anchor 自身 + 同一行里的兄弟按钮（编辑主页 / 分享主页 …）
+// 按钮行在 host 坐标系里的矩形：anchor 自身 + 同一行里「尺寸相近」的兄弟按钮。
+// 注意：不能把带手势的大容器并进来，否则矩形上沿会跑到屏幕顶部（那正是之前「贴到最顶部」的原因）。
 static CGRect PBRowRectForAnchor(UIView *anchor, UIView *host) {
     if (!anchor || !host) return CGRectZero;
     CGRect r = [anchor convertRect:anchor.bounds toView:host];
     UIView *parent = anchor.superview;
-    if (!parent) return r;
+    if (!parent || r.size.height < 10.0) return r;
+
+    const CGFloat anchorH = r.size.height;
+    const CGFloat maxHeight = anchorH * 1.6;
 
     for (UIView *sib in parent.subviews) {
         if (sib == anchor) continue;
@@ -648,13 +798,21 @@ static CGRect PBRowRectForAnchor(UIView *anchor, UIView *host) {
                            sib.gestureRecognizers.count > 0 ||
                            [NSStringFromClass([sib class]) containsString:@"Button"];
         if (!looksButton) continue;
+
         CGRect sr = [sib convertRect:sib.bounds toView:host];
         if (sr.size.width < 20.0 || sr.size.height < 10.0) continue;
+        // 只合并同一行、尺寸接近的按钮；大容器（整个 header）直接跳过
+        if (fabs(sr.size.height - anchorH) > 12.0) continue;
+        if (sr.size.width > 320.0 || sr.size.width > r.size.width * 2.5) continue;
+        if (CGRectContainsRect(sr, r)) continue;
+
         CGFloat overlap = MIN(CGRectGetMaxY(sr), CGRectGetMaxY(r)) - MAX(sr.origin.y, r.origin.y);
         CGFloat minHeight = MIN(sr.size.height, r.size.height);
-        if (overlap > minHeight * 0.5) {
-            r = CGRectUnion(r, sr);
-        }
+        if (overlap <= minHeight * 0.6) continue;
+
+        CGRect merged = CGRectUnion(r, sr);
+        if (merged.size.height > maxHeight) continue;
+        r = merged;
     }
     return r;
 }
@@ -751,16 +909,27 @@ static BOOL PBInsertOverlayAbove(UIView *anchor, UIView *row, UIViewController *
     [vc.view addSubview:row];
 
     CGFloat h = PBOverlayHeight();
+    CGFloat gap = PBOverlayGap();
     CGRect rect = PBRowRectForAnchor(anchor, vc.view);
-    row.frame = PBRowFrameAboveRect(rect, vc.view.bounds, vc.view.safeAreaInsets.top, h, PBOverlayGap());
+    CGFloat rawY = rect.origin.y - gap - h;
+    CGRect frame = PBRowFrameAboveRect(rect, vc.view.bounds, vc.view.safeAreaInsets.top, h, gap);
+    row.frame = frame;
+    BOOL clamped = fabs(frame.origin.y - rawY) > 0.5;
 
     PBRowTracker *tracker = [[PBRowTracker alloc] initWithRow:row anchor:anchor vc:vc];
     objc_setAssociatedObject(vc, &kPBTrackerKey, tracker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [tracker start];
 
-    PB_LOG(@"overlay above buttons: anchor=%@ rowRect=%@ frame=%@",
-           NSStringFromClass([anchor class]), NSStringFromCGRect(rect),
-           NSStringFromCGRect(row.frame));
+    PB_LOG(@"overlay: vc=%@ view=%@ safeTop=%.0f anchor=%@ anchorRect=%@ rawY=%.0f clamped=%d frame=%@",
+           NSStringFromClass([vc class]), NSStringFromCGRect(vc.view.bounds),
+           vc.view.safeAreaInsets.top, NSStringFromClass([anchor class]),
+           NSStringFromCGRect(rect), rawY, clamped, NSStringFromCGRect(frame));
+
+    if (clamped) {
+        // 位置被夹住 = 锚点太靠上，把候选清单写进日志，方便按真实层级调整
+        PB_LOG(@"overlay clamped: dumping tappable candidates");
+        for (NSString *s in PBSampleTappableViews(vc.view)) PB_LOG(@"  tappable: %@", s);
+    }
     return YES;
 }
 
@@ -997,10 +1166,16 @@ __attribute__((constructor)) static void PBInit(void) {
         }
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d)",
-               @"2025-10-21-r5",
+               @"2025-10-21-r6",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert());
+        PB_LOG(@"env: ios=%@ screen=%@ app=%@ (%@) log=%@",
+               [[UIDevice currentDevice] systemVersion],
+               NSStringFromCGRect([UIScreen mainScreen].bounds),
+               [[NSBundle mainBundle] infoDictionary][@"CFBundleShortVersionString"] ?: @"?",
+               [[NSBundle mainBundle] infoDictionary][@"CFBundleVersion"] ?: @"?",
+               PBLogFilePath());
         PB_LOG(@"bundle=%@", [[NSBundle mainBundle] bundlePath]);
         PB_LOG(@"UIViewController.viewDidAppear hooked=%d", PBOrigViewDidAppear != NULL);
 

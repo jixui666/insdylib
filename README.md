@@ -154,8 +154,29 @@ Sideloadly 的特色之一就是 **Tweak Injection**（支持 `.dylib / .deb / .
 [ProfileButtons] installed 3 button(s) (in header)
 ```
 
-查看方式：**Sideloadly → Device System Logs**（或 macOS 的 Console.app / Windows 用 `idevicesyslog`）。
-`Debug` 为 `true` 时会把按钮的祖先链打印出来。
+查看方式：日志会**同时**写到 `NSLog` 和 app 沙盒文件：
+
+```
+Documents/ProfileButtons.log
+```
+
+取这个文件的办法（任选其一）：
+
+1. 在 `Payload/Instagram.app/Info.plist` 里加两行，让 App 的 Documents 出现在「文件」App：
+   ```xml
+   <key>UIFileSharingEnabled</key><true/>
+   <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+   ```
+   然后「文件」App → 我的 iPhone → Instagram → `ProfileButtons.log`；
+2. 用 Sideloadly 的 **App File Sharing** / iMazing / iTools 打开 App 容器，进 `Documents`；
+3. 越狱设备直接用 Filza 打开 App 沙盒。
+
+日志文件超过 1 MB 会自动清空重建。`Debug` 为 `true` 时才会记录候选按钮清单、祖先链等详细内容。
+
+> 不想折腾取文件的话：**长按任意自绘按钮 0.6 秒**会弹出「ProfileButtons 日志」查看器，
+> 里面可以全选，右上角「复制」直接拷到剪贴板。
+
+> 需要 NSLog 的话也不变：Sideloadly → Device System Logs，过滤 `ProfileButtons`。
 
 ---
 
