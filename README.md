@@ -94,6 +94,8 @@ ProfileButtonsTweak/
 - **不放 `PBConfig.plist` 也能用**：三个内置按钮照常出现。
 - 条数随意，2 条、3 条、5 条都行（自动均分宽度）。
 - `http/https` 走应用内浏览器；`tg://`、`instagram://`、`mailto:` 这类交给系统。
+- **控制端**：`control-server-php/`（PHP，后台登录 → 填 3 个 URL → 保存）或 `control-server/`（Node）。
+  部署好后把 `https://你的域名/api.php`（或 Node 的 `/api/buttons`）填进 `ControlURL`。
 - 只有**自己的主页**会出现这三个按钮：代码是靠「能不能找到『编辑主页』按钮」来判断的，
   别人的主页没有这个按钮，所以不会插入（也不会一直空转，失败 8 次就放弃）。
 - 这个 plist 要**放进 App 包里**（`Payload/Instagram.app/PBConfig.plist`），不是放在 dylib 里。

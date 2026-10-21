@@ -1,0 +1,11 @@
+# 让 data 目录不可被公网直接访问（Apache）
+# Nginx 用户请在 server 块里加：
+#   location ^~ /data/ { deny all; }
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
