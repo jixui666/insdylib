@@ -1255,6 +1255,88 @@ static BOOL PBInstallStringCrashPatch(void) {
                      (IMP)PBRangeOfString, (IMP *)&PBOrigRangeOfString);
 }
 
+// ---------------------------------------------------------------------------
+// 拦截「Instagram Beta 更新」提醒
+// 只拦「弹窗类控制器 + 文案里同时有 Beta 和 更新/update 字样」的对话框，
+// 其它弹窗（包括我们自己的浏览器）不受影响。
+// ---------------------------------------------------------------------------
+
+static BOOL PBSuppressBetaNagEnabled(void) {
+    id v = PBConfig()[@"SuppressBetaNag"];
+    return v ? [v boolValue] : YES;
+}
+
+static BOOL PBViewLooksLikeDialog(UIViewController *vc) {
+    if (!vc) return NO;
+    if ([vc isKindOfClass:[UIAlertController class]]) return YES;
+    NSString *cls = NSStringFromClass([vc class]);
+    NSArray<NSString *> *keys = @[@"Alert", @"Dialog", @"Prompt", @"Upsell", @"Nag"];
+    for (NSString *k in keys) {
+        if ([cls containsString:k]) return YES;
+    }
+    return NO;
+}
+
+static NSString *PBDialogText(UIViewController *vc) {
+    NSMutableString *text = [NSMutableString string];
+    @try {
+        id title = [vc valueForKey:@"title"];
+        if ([title isKindOfClass:[NSString class]]) [text appendString:title];
+        for (NSString *key in @[@"message", @"text", @"body", @"subtitle", @"attributedMessage"]) {
+            id v = [vc valueForKey:key];
+            if ([v isKindOfClass:[NSString class]]) {
+                [text appendString:v];
+            } else if ([v isKindOfClass:[NSAttributedString class]]) {
+                [text appendString:[(NSAttributedString *)v string]];
+            }
+        }
+    } @catch (NSException *e) {
+        PB_LOG(@"dialog text read caught: %@", e.reason);
+    }
+    return text;
+}
+
+static BOOL PBTextLooksLikeBetaNag(NSString *text) {
+    if (![text isKindOfClass:[NSString class]] || text.length == 0) return NO;
+    NSString *lower = [text lowercaseString];
+    if ([lower containsString:@"beta"] == NO) return NO;
+
+    NSArray<NSString *> *updateWords = @[
+        @"update", @"upgrade", @"新版", @"更新", @"升级", @"升級",
+        @"アップデート", @"обнов", @"actualiz", @"atualiz", @"mise à jour", @"güncelle",
+    ];
+    for (NSString *w in updateWords) {
+        if ([lower containsString:w]) return YES;
+    }
+    // 文案里只有 "Beta" 且是弹窗类，也大概率是更新提醒
+    return YES;
+}
+
+typedef void (*PBPresentIMP)(id, SEL, UIViewController *, BOOL, void (^)(void));
+static PBPresentIMP PBOrigPresent;
+
+static void PBPresent(id self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
+    @try {
+        if (vc && PBSuppressBetaNagEnabled() && PBViewLooksLikeDialog(vc)) {
+            NSString *text = PBDialogText(vc);
+            if (PBTextLooksLikeBetaNag(text)) {
+                PB_LOG(@"suppressed beta nag: %@ | %@", NSStringFromClass([vc class]), text);
+                if (completion) completion();
+                return;
+            }
+        }
+    } @catch (NSException *e) {
+        PB_LOG(@"beta nag filter caught: %@", e.reason);
+    }
+    if (PBOrigPresent) PBOrigPresent(self, _cmd, vc, animated, completion);
+}
+
+static BOOL PBInstallBetaNagFilter(void) {
+    return PBHookSel([UIViewController class],
+                     @selector(presentViewController:animated:completion:),
+                     (IMP)PBPresent, (IMP *)&PBOrigPresent);
+}
+
 static BOOL PBNativeTryInstall(UIView *anchor, UIViewController *vc) {
     id enabled = PBConfig()[@"NativeInsert"];
     if (enabled && ![enabled boolValue]) return NO;
@@ -1867,13 +1949,14 @@ __attribute__((constructor)) static void PBInit(void) {
         }
 
         BOOL stringPatched = PBInstallStringCrashPatch();
+        BOOL nagFilter = PBInstallBetaNagFilter();
 
-        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d)",
-               @"2025-10-21-r14",
+        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d, nagFilter=%d)",
+               @"2025-10-21-r15",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
-               PBCurrentLanguage(), stringPatched);
+               PBCurrentLanguage(), stringPatched, nagFilter);
         PB_LOG(@"env: ios=%@ screen=%@ app=%@ (%@) log=%@",
                [[UIDevice currentDevice] systemVersion],
                NSStringFromCGRect([UIScreen mainScreen].bounds),
