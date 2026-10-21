@@ -1658,10 +1658,39 @@ static BOOL PBInstallRyukDefaultsPatch(void) {
                        (IMP)PBObjectForKey, (IMP *)&PBOrigObjectForKey);
     BOOL b = PBHookSel([NSUserDefaults class], @selector(boolForKey:),
                        (IMP)PBBoolForKey, (IMP *)&PBOrigBoolForKey);
-    BOOL c = PBHookSel([NSUserDefaults class], @selector(doubleForKey:),
-                       (IMP)PBDoubleForKey, (IMP *)&PBOrigDoubleForKey);
+    BOOL c = PBHookSel([NSUserDefaults class], @selector(doubleForKey:),                       (IMP)PBDoubleForKey, (IMP *)&PBOrigDoubleForKey);
     PB_LOG(@"ryuk: defaults read hook object=%d bool=%d double=%d", a, b, c);
     return a && b && c;
+}
+
+// ---------------------------------------------------------------------------
+// 直接拦 IG 自己的 TestFlight 更新弹窗
+// 弹窗类是 IGTestFlightUpdateNagController
+// （Swift: IGCoreRootTestFlightNagPlugin.TestFlightUpdateNudgeViewController）。
+// 按类拦截，不依赖弹窗文案；同时把「已提示过」的 defaults 置位，
+// 效果等价于 RyukGram 的 hide_testflight_nag。
+// ---------------------------------------------------------------------------
+static BOOL PBIsTestFlightNagVC(UIViewController *vc) {
+    if (!vc) return NO;
+    NSString *name = NSStringFromClass([vc class]);
+    if ([name containsString:@"TestFlightUpdateNag"] ||
+        [name containsString:@"TestFlightUpdateNudge"] ||
+        [name containsString:@"TFUpdateNag"]) {
+        return YES;
+    }
+    Class cls = NSClassFromString(@"IGTestFlightUpdateNagController");
+    if (cls && [vc isKindOfClass:cls]) return YES;
+    return NO;
+}
+
+static void PBMarkTestFlightNagSeen(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setBool:YES forKey:@"kIGTestFlightUpdateNagControllerHasSeenPromptKey"];
+    [defaults setBool:YES forKey:@"kIGTestFlightUpdateNagControllerThankYouReminder"];
+    [defaults setDouble:4102444800.0 forKey:@"kIGTestFlightUpdateNagControllerTestFlightLaterDefault"];
+    [defaults synchronize];
+    PB_LOG(@"tfnag: marked as seen (class=%@)",
+           NSClassFromString(@"IGTestFlightUpdateNagController") ? @"found" : @"nil");
 }
 
 typedef void (*PBPresentIMP)(id, SEL, UIViewController *, BOOL, void (^)(void));
@@ -1669,6 +1698,11 @@ static PBPresentIMP PBOrigPresent;
 
 static void PBPresent(id self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
     @try {
+        if (vc && PBIsTestFlightNagVC(vc)) {
+            PB_LOG(@"suppressed testflight nag: %@", NSStringFromClass([vc class]));
+            if (completion) completion();
+            return;
+        }
         if (vc && PBSuppressBetaNagEnabled() && PBViewLooksLikeDialog(vc)) {
             NSString *text = PBDialogText(vc);
             if (text.length < 4) {
@@ -2328,6 +2362,7 @@ __attribute__((constructor)) static void PBInit(void) {
         gPBIGDefaultsLanguage = PBReadIGLanguageFromDefaults();
         PBInstallRyukDefaultsPatch();
         PBApplyRyukDefaults();
+        PBMarkTestFlightNagSeen();
         // RyukGram 的设置在它自己的初始化里读，晚一点再写一遍，确保覆盖
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -2335,7 +2370,7 @@ __attribute__((constructor)) static void PBInit(void) {
         });
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d, nagFilter=%d)",
-               @"2025-10-21-r19",
+               @"2025-10-21-r20",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
