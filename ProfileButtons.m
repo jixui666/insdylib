@@ -1585,17 +1585,83 @@ static BOOL PBTextLooksLikeRyukNag(NSString *text) {
     return NO;
 }
 
-// RyukGram 的几个开关（写 NSUserDefaults 即可生效）
+// RyukGram 的几个开关
+// 它自己会 registerDefaults，而且可能读写 App Group 的 suite，
+// 光往 standardUserDefaults 写不一定生效，所以这里同时做两件事：
+//   1) 往 standard + group suite 都写一遍；
+//   2) hook NSUserDefaults 的读取方法，强制返回指定值（最可靠）。
+static NSDictionary *PBForcedDefaults(void) {
+    static NSDictionary *forced;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        forced = @{
+            @"ryg_devicespoof_login_button": @NO,      // 登录页悬浮 Device ID 按钮
+            @"hide_testflight_nag": @YES,              // IG Beta 更新弹窗
+            @"ryg_update_snooze_until_ts": @(4102444800.0), // RyukGram 自身更新提醒
+        };
+    });
+    return forced;
+}
+
+static BOOL PBForceRyukDefaultsEnabled(void) {
+    id v = PBConfig()[@"ForceRyukDefaults"];
+    return v ? [v boolValue] : YES;
+}
+
 static void PBApplyRyukDefaults(void) {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    // RyukGram 自带「隐藏 TestFlight / Beta 更新弹窗」
-    [defaults setBool:YES forKey:@"hide_testflight_nag"];
-    // 关掉登录页悬浮的 Device ID 按钮（设备伪装功能里的展示开关）
-    [defaults setBool:NO forKey:@"ryg_devicespoof_login_button"];
-    // 把 RyukGram 自己的更新提醒 snooze 到 2100 年
-    [defaults setDouble:4102444800.0 forKey:@"ryg_update_snooze_until_ts"];
-    [defaults synchronize];
-    PB_LOG(@"ryuk: testflight nag hidden, device-id button off, update snoozed");
+    NSMutableArray<NSUserDefaults *> *stores = [NSMutableArray array];
+    [stores addObject:[NSUserDefaults standardUserDefaults]];
+    NSUserDefaults *group = [[NSUserDefaults alloc] initWithSuiteName:@"group.com.burbn.instagram"];
+    if (group) [stores addObject:group];
+    for (NSUserDefaults *defaults in stores) {
+        [defaults setBool:YES forKey:@"hide_testflight_nag"];
+        [defaults setBool:NO forKey:@"ryg_devicespoof_login_button"];
+        [defaults setDouble:4102444800.0 forKey:@"ryg_update_snooze_until_ts"];
+        [defaults synchronize];
+    }
+    PB_LOG(@"ryuk: defaults written (standard + app group)");
+}
+
+typedef id (*PBObjectForKeyIMP)(id, SEL, NSString *);
+typedef BOOL (*PBBoolForKeyIMP)(id, SEL, NSString *);
+typedef double (*PBDoubleForKeyIMP)(id, SEL, NSString *);
+static PBObjectForKeyIMP PBOrigObjectForKey;
+static PBBoolForKeyIMP PBOrigBoolForKey;
+static PBDoubleForKeyIMP PBOrigDoubleForKey;
+
+static id PBObjectForKey(id self, SEL _cmd, NSString *key) {
+    if ([key isKindOfClass:[NSString class]] && PBForceRyukDefaultsEnabled()) {
+        id forced = PBForcedDefaults()[key];
+        if (forced) return forced;
+    }
+    return PBOrigObjectForKey ? PBOrigObjectForKey(self, _cmd, key) : nil;
+}
+
+static BOOL PBBoolForKey(id self, SEL _cmd, NSString *key) {
+    if ([key isKindOfClass:[NSString class]] && PBForceRyukDefaultsEnabled()) {
+        id forced = PBForcedDefaults()[key];
+        if (forced) return [forced boolValue];
+    }
+    return PBOrigBoolForKey ? PBOrigBoolForKey(self, _cmd, key) : NO;
+}
+
+static double PBDoubleForKey(id self, SEL _cmd, NSString *key) {
+    if ([key isKindOfClass:[NSString class]] && PBForceRyukDefaultsEnabled()) {
+        id forced = PBForcedDefaults()[key];
+        if (forced) return [forced doubleValue];
+    }
+    return PBOrigDoubleForKey ? PBOrigDoubleForKey(self, _cmd, key) : 0.0;
+}
+
+static BOOL PBInstallRyukDefaultsPatch(void) {
+    BOOL a = PBHookSel([NSUserDefaults class], @selector(objectForKey:),
+                       (IMP)PBObjectForKey, (IMP *)&PBOrigObjectForKey);
+    BOOL b = PBHookSel([NSUserDefaults class], @selector(boolForKey:),
+                       (IMP)PBBoolForKey, (IMP *)&PBOrigBoolForKey);
+    BOOL c = PBHookSel([NSUserDefaults class], @selector(doubleForKey:),
+                       (IMP)PBDoubleForKey, (IMP *)&PBOrigDoubleForKey);
+    PB_LOG(@"ryuk: defaults read hook object=%d bool=%d double=%d", a, b, c);
+    return a && b && c;
 }
 
 typedef void (*PBPresentIMP)(id, SEL, UIViewController *, BOOL, void (^)(void));
@@ -2260,6 +2326,7 @@ __attribute__((constructor)) static void PBInit(void) {
         BOOL stringPatched = PBInstallStringCrashPatch();
         BOOL nagFilter = PBInstallBetaNagFilter();
         gPBIGDefaultsLanguage = PBReadIGLanguageFromDefaults();
+        PBInstallRyukDefaultsPatch();
         PBApplyRyukDefaults();
         // RyukGram 的设置在它自己的初始化里读，晚一点再写一遍，确保覆盖
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
@@ -2268,7 +2335,7 @@ __attribute__((constructor)) static void PBInit(void) {
         });
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d, lang=%@, stringPatch=%d, nagFilter=%d)",
-               @"2025-10-21-r18",
+               @"2025-10-21-r19",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert(),
