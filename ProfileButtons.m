@@ -112,6 +112,13 @@ static CGFloat PBOverlayGap(void) {
     return v ? [v doubleValue] : 4.0;
 }
 
+// 是否优先尝试「插进 header 布局」（默认关：IG 的 header 多半是手写 frame，
+// 插进去容易被裁掉/压住；跟随重叠层更可控）
+static BOOL PBTryHeaderInsert(void) {
+    id v = PBConfig()[@"TryHeaderInsert"];
+    return v ? [v boolValue] : NO;
+}
+
 // ---------------------------------------------------------------------------
 // MARK: - 通用：找 VC / 找视图 / 打印层级
 // ---------------------------------------------------------------------------
@@ -204,44 +211,77 @@ static BOOL PBTextMatchesEditProfile(NSString *text) {
     return NO;
 }
 
+// 只在 root 的「内容区」里找，导航栏里的同名元素不算
+static BOOL PBViewInsideChrome(UIView *v, UIView *root) {
+    UIView *cur = v;
+    for (int i = 0; i < 20 && cur; i++, cur = cur.superview) {
+        if ([cur isKindOfClass:[UINavigationBar class]] ||
+            [cur isKindOfClass:[UITabBar class]] ||
+            [cur isKindOfClass:[UIToolbar class]]) {
+            return YES;
+        }
+        if (cur == root) break;
+    }
+    return NO;
+}
+
+// 收集所有候选，挑「最靠下、可点、尺寸正常」的那个：
+// 个人主页里的「编辑主页」在简介下面，不会被导航栏里的同名元素或隐藏的旧 header 抢走。
 static UIView *PBFindEditProfileAnchor(UIView *root) {
     if (!root) return nil;
 
     NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
     NSInteger visited = 0;
+    UIView *best = nil;
+    CGFloat bestScore = -CGFLOAT_MAX;
+
     while (queue.count > 0 && visited < 12000) {
         UIView *v = queue.firstObject;
         [queue removeObjectAtIndex:0];
         visited++;
 
         BOOL matched = NO;
+        BOOL byIdentifier = NO;
 
-        // 1) IG 自己给这个按钮挂了无障碍标识，最可靠
         NSString *ident = v.accessibilityIdentifier;
         if (ident.length &&
             ([ident isEqualToString:@"edit_profile_button"] ||
              [ident localizedCaseInsensitiveContainsString:@"edit_profile"])) {
             matched = YES;
+            byIdentifier = YES;
         }
-
-        // 2) 文字兜底（按钮本身、按钮内部 label、accessibilityLabel、attributed title）
         if (!matched && PBTextMatchesEditProfile(PBViewOwnText(v))) matched = YES;
         if (!matched && PBTextMatchesEditProfile(v.accessibilityLabel)) matched = YES;
 
-        if (matched) {
-            UIView *tappable = PBTappableAncestor(v);
-            if (tappable) return tappable;
-            if (v.userInteractionEnabled && v.bounds.size.width > 60) return v;
-            // 文字命中但暂时找不到可点的祖先：返回最上层那个有尺寸的祖先
-            UIView *up = v.superview;
-            for (int i = 0; i < 6 && up; i++, up = up.superview) {
-                if (up.bounds.size.width > 60 && up.bounds.size.height > 20) return up;
+        if (matched && !PBViewInsideChrome(v, root)) {
+            UIView *anchor = PBTappableAncestor(v) ?: v;
+            CGRect r = [anchor convertRect:anchor.bounds toView:root];
+            BOOL usable = r.size.width > 30.0 && r.size.height > 14.0 &&
+                          !CGRectIsEmpty(r) && anchor.alpha > 0.05 && !anchor.hidden &&
+                          CGRectIntersectsRect(r, root.bounds);
+            if (usable) {
+                // 分数：可点 +1000、带 edit_profile 标识 +500、位置越靠下越好
+                CGFloat score = r.origin.y;
+                if ([anchor isKindOfClass:[UIControl class]]) score += 1000.0;
+                if (anchor.gestureRecognizers.count > 0) score += 300.0;
+                if (byIdentifier) score += 500.0;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = anchor;
+                }
             }
         }
 
         [queue addObjectsFromArray:v.subviews];
     }
-    return nil;
+
+    if (PBDebug() && best) {
+        CGRect r = [best convertRect:best.bounds toView:root];
+        PB_LOG(@"anchor chosen: %@ id=%@ rect=%@",
+               NSStringFromClass([best class]), best.accessibilityIdentifier ?: @"-",
+               NSStringFromCGRect(r));
+    }
+    return best;
 }
 
 // 在 root 里找「所有可能是按钮」的可点视图，仅用于 debug 日志
@@ -591,26 +631,68 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
 
 // ---------------------------------------------------------------------------
 // 方案 D：跟随按钮行位置的重叠层
-// 不依赖 StackView / 约束，直接贴在「编辑主页 / 分享主页」这一行的上方一点点；
-// 每次布局后重新贴位置，所以手写 frame 布局的 header 也能用。
+// 直接挂在 vc.view 上（不碰 IG 的容器，避免被 clipsToBounds 裁掉），
+// 用坐标换算把行贴在「编辑主页 / 分享主页」这一行的上沿，滚动时每帧跟随。
 // ---------------------------------------------------------------------------
+
+// 按钮行在 host 坐标系里的矩形：anchor 自身 + 同一行里的兄弟按钮（编辑主页 / 分享主页 …）
+static CGRect PBRowRectForAnchor(UIView *anchor, UIView *host) {
+    if (!anchor || !host) return CGRectZero;
+    CGRect r = [anchor convertRect:anchor.bounds toView:host];
+    UIView *parent = anchor.superview;
+    if (!parent) return r;
+
+    for (UIView *sib in parent.subviews) {
+        if (sib == anchor) continue;
+        BOOL looksButton = [sib isKindOfClass:[UIControl class]] ||
+                           sib.gestureRecognizers.count > 0 ||
+                           [NSStringFromClass([sib class]) containsString:@"Button"];
+        if (!looksButton) continue;
+        CGRect sr = [sib convertRect:sib.bounds toView:host];
+        if (sr.size.width < 20.0 || sr.size.height < 10.0) continue;
+        CGFloat overlap = MIN(CGRectGetMaxY(sr), CGRectGetMaxY(r)) - MAX(sr.origin.y, r.origin.y);
+        CGFloat minHeight = MIN(sr.size.height, r.size.height);
+        if (overlap > minHeight * 0.5) {
+            r = CGRectUnion(r, sr);
+        }
+    }
+    return r;
+}
+
+// 把按钮行矩形换算成「行放哪」：安全区下方、按钮行上方 gap 处，并夹在屏幕内
+static CGRect PBRowFrameAboveRect(CGRect rect, CGRect bounds, CGFloat safeTop, CGFloat h, CGFloat gap) {
+    CGFloat y = rect.origin.y - gap - h;
+    CGFloat minY = safeTop + 4.0;
+    CGFloat maxY = bounds.size.height - h - 6.0;
+    if (maxY < minY) maxY = minY;
+    if (y < minY) y = minY;
+    if (y > maxY) y = maxY;
+
+    CGFloat x = MAX(8.0, rect.origin.x);
+    CGFloat w = MIN(rect.size.width, bounds.size.width - x - 8.0);
+    if (w < 120.0) {
+        x = 8.0;
+        w = MAX(120.0, bounds.size.width - 16.0);
+    }
+    return CGRectMake(x, y, w, h);
+}
 
 @interface PBRowTracker : NSObject
 @property (nonatomic, weak) UIView *row;
-@property (nonatomic, weak) UIView *alignView;
+@property (nonatomic, weak) UIView *anchor;
 @property (nonatomic, weak) UIViewController *vc;
 @property (nonatomic, strong) CADisplayLink *link;
-- (instancetype)initWithRow:(UIView *)row alignView:(UIView *)alignView vc:(UIViewController *)vc;
+- (instancetype)initWithRow:(UIView *)row anchor:(UIView *)anchor vc:(UIViewController *)vc;
 - (void)start;
 - (void)stop;
 @end
 
 @implementation PBRowTracker
 
-- (instancetype)initWithRow:(UIView *)row alignView:(UIView *)alignView vc:(UIViewController *)vc {
+- (instancetype)initWithRow:(UIView *)row anchor:(UIView *)anchor vc:(UIViewController *)vc {
     if (self = [super init]) {
         _row = row;
-        _alignView = alignView;
+        _anchor = anchor;
         _vc = vc;
     }
     return self;
@@ -630,26 +712,21 @@ static BOOL PBInsertRelativeToContainer(UIView *anchor, UIView *row) {
 
 - (void)tick:(CADisplayLink *)link {
     UIView *row = self.row;
-    UIView *align = self.alignView;
+    UIView *anchor = self.anchor;
     UIViewController *vc = self.vc;
     UIView *host = row.superview;
 
-    if (!row || !align || !host || !vc) { [self stop]; return; }
-    if (vc.view.window == nil || align.window == nil) {
+    if (!row || !anchor || !host || !vc) { [self stop]; return; }
+    if (vc.view.window == nil || anchor.window == nil) {
         row.hidden = YES;
         [self stop];          // 页面不可见就停，等下次 viewDidAppear 再重启
         return;
     }
     if (row.hidden) row.hidden = NO;
 
-    CGRect a = [align convertRect:align.bounds toView:host];
     CGFloat h = row.bounds.size.height > 0 ? row.bounds.size.height : PBOverlayHeight();
-    CGFloat gap = PBOverlayGap();
-    CGRect f = CGRectMake(a.origin.x, a.origin.y - gap - h, a.size.width, h);
-
-    CGFloat maxY = MAX(0.0, host.bounds.size.height - h);
-    if (f.origin.y > maxY) f.origin.y = maxY;
-    if (f.origin.y < 0.0) f.origin.y = 0.0;
+    CGRect rect = PBRowRectForAnchor(anchor, host);
+    CGRect f = PBRowFrameAboveRect(rect, host.bounds, host.safeAreaInsets.top, h, PBOverlayGap());
     if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
 }
 
@@ -667,26 +744,22 @@ static void PBRemoveRowHeightConstraints(UIView *row) {
 }
 
 static BOOL PBInsertOverlayAbove(UIView *anchor, UIView *row, UIViewController *vc) {
-    UIView *align = anchor.superview ?: anchor;
-    UIView *host = align;
-    while (host && [host isKindOfClass:[UIStackView class]]) host = host.superview;
-    if (!host || host == row) return NO;
+    if (!anchor || !vc.view) return NO;
 
     PBRemoveRowHeightConstraints(row);
     row.translatesAutoresizingMaskIntoConstraints = YES;
-    [host addSubview:row];
+    [vc.view addSubview:row];
 
-    CGRect a = [align convertRect:align.bounds toView:host];
     CGFloat h = PBOverlayHeight();
-    CGFloat gap = PBOverlayGap();
-    row.frame = CGRectMake(a.origin.x, a.origin.y - gap - h, a.size.width, h);
+    CGRect rect = PBRowRectForAnchor(anchor, vc.view);
+    row.frame = PBRowFrameAboveRect(rect, vc.view.bounds, vc.view.safeAreaInsets.top, h, PBOverlayGap());
 
-    PBRowTracker *tracker = [[PBRowTracker alloc] initWithRow:row alignView:align vc:vc];
+    PBRowTracker *tracker = [[PBRowTracker alloc] initWithRow:row anchor:anchor vc:vc];
     objc_setAssociatedObject(vc, &kPBTrackerKey, tracker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [tracker start];
 
-    PB_LOG(@"overlay above %@ in %@ frame=%@",
-           NSStringFromClass([align class]), NSStringFromClass([host class]),
+    PB_LOG(@"overlay above buttons: anchor=%@ rowRect=%@ frame=%@",
+           NSStringFromClass([anchor class]), NSStringFromCGRect(rect),
            NSStringFromCGRect(row.frame));
     return YES;
 }
@@ -837,41 +910,51 @@ static void PBInstallForViewController(UIViewController *vc) {
 
     UIView *row = PBMakeRow();
     NSString *mode = @"docked";
-    if (PBInsertIntoVerticalStack(anchor, row)) {
-        mode = @"in header (stack)";
-    } else if (PBInsertRelativeToContainer(anchor, row)) {
-        mode = @"in header (constraints)";
-    } else if (PBInsertOverlayAbove(anchor, row, vc)) {
-        mode = @"overlay above buttons";
-    } else {
-        PBDockToViewController(vc, row);
+    BOOL usedHeader = NO;
+    if (PBTryHeaderInsert()) {
+        if (PBInsertIntoVerticalStack(anchor, row)) {
+            mode = @"in header (stack)";
+            usedHeader = YES;
+        } else if (PBInsertRelativeToContainer(anchor, row)) {
+            mode = @"in header (constraints)";
+            usedHeader = YES;
+        }
     }
-    BOOL inHeader = ![mode isEqualToString:@"docked"];
-
+    if (!usedHeader) {
+        if (PBInsertOverlayAbove(anchor, row, vc)) {
+            mode = @"overlay above buttons";
+        } else {
+            PBDockToViewController(vc, row);
+        }
+    }
     objc_setAssociatedObject(vc, &kPBInstalledRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     PB_LOG(@"installed %lu button(s) %@ edit-profile row (%@)",
            (unsigned long)PBButtonConfigs().count,
            PBPositionAbove() ? @"above" : @"below", mode);
 
-    // 关键：插进 header 后确认真的看得见，看不见就退回悬浮
-    if (inHeader) {
+    // 插进 header 布局才需要复核可见性；重叠层自己会跟随，不需要复核
+    if (usedHeader) {
         __weak UIView *weakRow = row;
         __weak UIViewController *weakVC = vc;
+        __weak UIView *weakAnchor = anchor;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UIView *strongRow = weakRow;
             UIViewController *strongVC = weakVC;
+            UIView *strongAnchor = weakAnchor;
             if (!strongRow || !strongVC) return;
             if (PBRowIsVisible(strongRow, strongVC)) return;
 
             CGRect inVC = strongRow.window ? [strongRow convertRect:strongRow.bounds toView:strongVC.view] : CGRectZero;
-            PB_LOG(@"row not visible after install (frame in VC: %@, superview %@) — docking instead",
+            PB_LOG(@"header row not visible (frame in VC: %@, superview %@) — falling back to overlay",
                    NSStringFromCGRect(inVC), NSStringFromClass([strongRow.superview class]));
             if (PBDebug()) PBDumpAncestors(strongRow, "invisible-row");
             PBRowTracker *tracker = objc_getAssociatedObject(strongVC, &kPBTrackerKey);
             [tracker stop];
             objc_setAssociatedObject(strongVC, &kPBTrackerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [strongRow removeFromSuperview];
-            PBDockToViewController(strongVC, strongRow);
+            if (!strongAnchor || !PBInsertOverlayAbove(strongAnchor, strongRow, strongVC)) {
+                PBDockToViewController(strongVC, strongRow);
+            }
             objc_setAssociatedObject(strongVC, &kPBInstalledRowKey, strongRow, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         });
     }
@@ -913,11 +996,11 @@ __attribute__((constructor)) static void PBInit(void) {
             method_setImplementation(m, (IMP)PBViewDidAppear);
         }
 
-        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d)",
-               @"2025-10-21-r4",
+        PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d)",
+               @"2025-10-21-r5",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
-               PBPositionAbove() ? @"above" : @"below", PBForceDock());
+               PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert());
         PB_LOG(@"bundle=%@", [[NSBundle mainBundle] bundlePath]);
         PB_LOG(@"UIViewController.viewDidAppear hooked=%d", PBOrigViewDidAppear != NULL);
 

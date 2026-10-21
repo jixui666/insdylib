@@ -83,6 +83,7 @@ ProfileButtonsTweak/
 <key>OverlayHeight</key><real>28</real>      <!-- 跟随重叠层的行高（更矮=更不挡） -->
 <key>OverlayGap</key><real>4</real>          <!-- 重叠层与按钮行的间距 -->
 <key>ForceDock</key><false/>                 <!-- true：直接悬浮在顶部，排障用 -->
+<key>TryHeaderInsert</key><false/>          <!-- true：先试插进 IG 的 header 布局 -->
 <key>ShowLaunchToast</key><true/>            <!-- 启动提示，确认 dylib 已加载 -->
 <key>UseSafariViewController</key><true/>
 <key>Debug</key><true/>
@@ -164,13 +165,13 @@ Sideloadly 的特色之一就是 **Tweak Injection**（支持 `.dylib / .deb / .
 
 | 策略 | 做法 | 效果 |
 | --- | --- | --- |
-| **A. 竖直 StackView** | 找到包住按钮行的「竖直 `UIStackView`」，把自绘行 `insertArrangedSubview:` 到按钮行**之前** | 最理想，IG 自己会把简介/精选整体往下推 |
-| **B. Auto Layout** | 挂到按钮行容器上方（`bottom = 容器.top - 8`），同时把按钮行下移并撑大父视图高度 | 只有 header 用约束布局时才成功；推不动就直接跳过 |
-| **D. 跟随重叠层**（默认回退） | 不依赖任何布局系统：把行加到按钮行的同一层，然后每帧把 `frame` 贴在按钮行上方（`OverlayGap` 4pt） | **一定贴得住**，会占据按钮上方 ~28pt 的空间（想矮一点改 `OverlayHeight`） |
-| **C. 悬浮兜底** | 贴在安全区顶部 / 底部 | 最后手段，保证能看见 |
+| **D. 跟随重叠层**（默认） | 把行加到 `vc.view` 上（不碰 IG 容器，不会被裁），每帧用坐标换算贴在按钮行上方 `OverlayGap` 处；锚点取「编辑主页」按钮并合并同一行的按钮算宽度 | 一定贴得住；占按钮上方 `OverlayHeight`（默认 28pt） |
+| **A. 竖直 StackView**（`TryHeaderInsert=true` 时） | 找到包住按钮行的竖直 `UIStackView`，插到按钮行之前 | 最干净，IG 会把简介整体往下推 |
+| **B. Auto Layout**（`TryHeaderInsert=true` 时） | 挂到按钮行容器上方，并把按钮行下移、撑大父视图 | 只有 header 用约束布局时才成立 |
+| **C. 悬浮兜底** | 贴在安全区顶部 / 底部 | 最后手段（`docked`，就是你现在看到的「最顶部」） |
 
-真机上只用其中一种，日志会写清楚用了哪种：
-`installed 3 button(s) above edit-profile row (overlay above buttons)` 之类。
+真机上只用其中一种，日志会写清楚：
+`installed 3 button(s) above edit-profile row (overlay above buttons)`。
 
 **如果 A 生效但被裁掉 / 位置压住了简介**：说明父容器是手写 frame 布局，勾选 `Debug`，
 用日志里的祖先链找到承载 header 的内容视图类名，然后在 `PBInsertRelativeToContainer()` 里

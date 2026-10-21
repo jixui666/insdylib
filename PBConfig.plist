@@ -59,6 +59,10 @@
     <key>OverlayGap</key>
     <real>4</real>
 
+    <!-- true：先尝试把行插进 IG 的 header 布局（可能被裁掉）；默认 false，用跟随重叠层 -->
+    <key>TryHeaderInsert</key>
+    <false/>
+
     <!-- 启动 2 秒后弹一个「ProfileButtons 已加载」提示，确认 dylib 真的被加载 -->
     <key>ShowLaunchToast</key>
     <true/>
