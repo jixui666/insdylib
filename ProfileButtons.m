@@ -129,7 +129,10 @@ static NSArray<NSDictionary *> *PBButtonConfigs(void) {
 
 static BOOL PBDebug(void) {
     id v = PBConfig()[@"Debug"];
-    return v ? [v boolValue] : NO;
+    if (v) return [v boolValue];
+    // 没有 PBConfig.plist 时默认开详细日志，省得为了排障再拆包放配置；
+    // 一旦放了配置，就以配置里的 Debug 为准。
+    return PBConfig().count == 0;
 }
 
 static BOOL PBUseSafariViewController(void) {
@@ -155,8 +158,7 @@ static BOOL PBForceDock(void) {
 
 static BOOL PBShouldShowLaunchToast(void) {
     id v = PBConfig()[@"ShowLaunchToast"];
-    if (v) return [v boolValue];
-    return PBDebug();
+    return v ? [v boolValue] : NO;
 }
 
 static CGFloat PBRowHeight(void) {
@@ -1208,7 +1210,7 @@ __attribute__((constructor)) static void PBInit(void) {
         }
 
         PB_LOG(@"loaded build=%@ (buttons=%lu, safari=%d, debug=%d, position=%@, forceDock=%d, tryHeader=%d)",
-               @"2025-10-21-r7",
+               @"2025-10-21-r8",
                (unsigned long)PBButtonConfigs().count,
                PBUseSafariViewController(), PBDebug(),
                PBPositionAbove() ? @"above" : @"below", PBForceDock(), PBTryHeaderInsert());
