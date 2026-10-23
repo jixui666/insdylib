@@ -62,13 +62,17 @@
     <key>Debug</key>
     <true/>
 
-    <!-- 账号参数兜底：点按钮打开网页时会拼 ?source=Instagram&pk=&customID=&username=&nickname=&lang=&timezone=&v=
-         pk/username/nickname 正常会自动从「自己的主页」读；读不到才用下面这三项 -->
+    <!-- 账号参数兜底：点按钮打开网页时会拼 ?data=base64({customID, avatar, lang, nickname,
+         timezone, tiktok_id, version, timestamp, route, source})
+         pk 正常会自动从「自己的主页」读；读不到才用下面的 AccountID -->
     <key>AccountID</key>
     <string></string>
     <key>Username</key>
     <string></string>
     <key>Nickname</key>
+    <string></string>
+    <!-- data 里的 avatar 字段，留空默认 "。。。" -->
+    <key>Avatar</key>
     <string></string>
 </dict>
 </plist>

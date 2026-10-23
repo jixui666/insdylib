@@ -764,51 +764,113 @@ static NSString *PBAccountLanguageCode(void) {
     return code.length ? code : @"en";
 }
 
-// 把 source / pk / customID / username / nickname / lang / timezone / v 拼到 http(s) URL 上；
-// 已经存在的同名参数不重复添加，非 http(s) 链接原样返回。
-static NSURL *PBURLWithAccountParams(NSURL *url) {
+static NSString *PBJSONEscape(NSString *s) {
+    if (s.length == 0) return @"";
+    NSMutableString *out = [NSMutableString stringWithCapacity:s.length + 8];
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        switch (c) {
+            case '"':  [out appendString:@"\\\""]; break;
+            case '\\': [out appendString:@"\\\\"]; break;
+            case '\n': [out appendString:@"\\n"]; break;
+            case '\r': [out appendString:@"\\r"]; break;
+            case '\t': [out appendString:@"\\t"]; break;
+            default:
+                if (c < 0x20) [out appendFormat:@"\\u%04x", (unsigned)c];
+                else [out appendFormat:@"%C", (unichar)c];
+                break;
+        }
+    }
+    return out;
+}
+
+static NSString *PBGMTOffset(void) {
+    NSInteger off = [NSTimeZone localTimeZone].secondsFromGMT / 60;
+    NSInteger a = off < 0 ? -off : off;
+    return [NSString stringWithFormat:@"GMT%c%02ld:%02ld", off < 0 ? '-' : '+',
+            (long)(a / 60), (long)(a % 60)];
+}
+
+static NSString *PBAccountRoute(NSString *buttonID, NSString *urlString) {
+    NSString *s = [[NSString stringWithFormat:@"%@ %@", buttonID ?: @"", urlString ?: @""]
+                   lowercaseString];
+    if ([s containsString:@"order"]) return @"orderList";
+    return @"goodsList";
+}
+
+// data = base64( {customID, avatar, lang, nickname, timezone, tiktok_id,
+//                 version, timestamp, route, source} )
+static NSString *PBAccountJSONString(NSString *buttonID, NSString *urlString) {
+    NSDictionary *acc = gPBAccountInfo ?: @{};
+    NSDictionary *cfg = PBConfig();
+
+    NSString *pk = acc[@"pk"];
+    NSString *name = acc[@"nickname"];
+    NSString *avatar = cfg[@"Avatar"];
+    if (![pk isKindOfClass:[NSString class]]) pk = nil;
+    if (![name isKindOfClass:[NSString class]]) name = nil;
+    if (![avatar isKindOfClass:[NSString class]]) avatar = nil;
+    if (pk.length == 0) pk = cfg[@"AccountID"];
+    if (![pk isKindOfClass:[NSString class]]) pk = @"";
+    if (name.length == 0) name = cfg[@"Nickname"];
+    if (![name isKindOfClass:[NSString class]]) name = @"";
+    if (name.length == 0) name = pk;
+    if (avatar.length == 0) avatar = @"。。。";
+
+    NSString *version = [[NSBundle mainBundle] infoDictionary][@"CFBundleShortVersionString"];
+    if (![version isKindOfClass:[NSString class]]) version = @"";
+    long long ts = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
+
+    return [NSString stringWithFormat:
+            @"{\n"
+            @"    \"customID\": \"%@\",\n"
+            @"    \"avatar\": \"%@\",\n"
+            @"    \"lang\": \"%@\",\n"
+            @"    \"nickname\": \"%@\",\n"
+            @"    \"timezone\": \"%@\",\n"
+            @"    \"tiktok_id\": \"%@\",\n"
+            @"    \"version\": \"%@\",\n"
+            @"    \"timestamp\": %lld,\n"
+            @"    \"route\": \"%@\",\n"
+            @"    \"source\":\"Instagram\"\n"
+            @"}",
+            PBJSONEscape(pk), PBJSONEscape(avatar), PBJSONEscape(PBAccountLanguageCode()),
+            PBJSONEscape(name), PBJSONEscape(PBGMTOffset()), PBJSONEscape(pk),
+            PBJSONEscape(version), ts,
+            PBJSONEscape(PBAccountRoute(buttonID, urlString))];
+}
+
+// 把 data=base64(json) 拼到 http(s) URL 上；已有 data 参数不重复加，非 http(s) 原样返回。
+static NSURL *PBURLWithAccountParams(NSURL *url, NSString *buttonID) {
     if (!url) return nil;
     NSString *scheme = url.scheme.lowercaseString;
     if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return url;
 
-    NSURLComponents *comps = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
-    if (!comps) return url;
+    NSString *s = url.absoluteString;
+    if ([s rangeOfString:@"?data="].location != NSNotFound ||
+        [s rangeOfString:@"&data="].location != NSNotFound) return url;
 
-    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray arrayWithArray:comps.queryItems ?: @[]];
-    NSMutableSet<NSString *> *existing = [NSMutableSet set];
-    for (NSURLQueryItem *item in items) {
-        if (item.name.length) [existing addObject:item.name];
+    NSString *fragment = @"";
+    NSRange hashRange = [s rangeOfString:@"#"];
+    if (hashRange.location != NSNotFound) {
+        fragment = [s substringFromIndex:hashRange.location];
+        s = [s substringToIndex:hashRange.location];
     }
 
-    void (^add)(NSString *, NSString *) = ^(NSString *key, NSString *value) {
-        if (key.length == 0 || value.length == 0) return;
-        if ([existing containsObject:key]) return;
-        [items addObject:[NSURLQueryItem queryItemWithName:key value:value]];
-        [existing addObject:key];
-    };
+    NSString *json = PBAccountJSONString(buttonID, url.absoluteString);
+    NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *b64 = [data base64EncodedStringWithOptions:0];
+    // '+' 必须转义，否则服务端 query 解析会当成空格
+    b64 = [b64 stringByReplacingOccurrencesOfString:@"+" withString:@"%2B"];
 
-    NSDictionary *acc = gPBAccountInfo ?: @{};
-    NSString *pk = acc[@"pk"];
-    NSString *user = acc[@"username"];
-    NSString *nick = acc[@"nickname"];
-    // 抓不到时的兜底：写在 PBConfig.plist 里的固定值
-    NSDictionary *cfg = PBConfig();
-    if (pk.length == 0) pk = cfg[@"AccountID"];
-    if (user.length == 0) user = cfg[@"Username"];
-    if (nick.length == 0) nick = cfg[@"Nickname"];
-    if (nick.length == 0) nick = user;
+    BOOL hasQuery = [s rangeOfString:@"?"].location != NSNotFound;
+    BOOL endsWithSep = [s hasSuffix:@"?"] || [s hasSuffix:@"&"];
+    NSMutableString *out = [NSMutableString stringWithString:s];
+    if (!endsWithSep) [out appendString:hasQuery ? @"&" : @"?"];
+    [out appendFormat:@"data=%@%@", b64, fragment];
 
-    add(@"source", @"Instagram");
-    add(@"pk", pk);
-    add(@"customID", pk);
-    add(@"username", user);
-    add(@"nickname", nick);
-    add(@"lang", PBAccountLanguageCode());
-    add(@"timezone", [NSTimeZone localTimeZone].name);
-    add(@"v", [[NSBundle mainBundle] infoDictionary][@"CFBundleShortVersionString"]);
-
-    comps.queryItems = items;
-    return comps.URL ?: url;
+    NSURL *result = [NSURL URLWithString:out];
+    return result ?: url;
 }
 
 static UIView *PBFindEditProfileAnchor(UIView *root, BOOL allowActionBarFallback) {
@@ -1040,6 +1102,7 @@ static void PBDumpTree(UIView *v, NSInteger depth, NSInteger maxDepth) {
 // ---------------------------------------------------------------------------
 
 static const char kPBURLKey;
+static const char kPBButtonIDKey;
 
 // 日志查看器：长按任意自绘按钮打开，可全选复制（不方便取沙盒文件时用）
 @interface PBLogViewController : UIViewController
@@ -1138,8 +1201,11 @@ static const char kPBURLKey;
         return;
     }
 
-    // 带上当前登录账号：source=Instagram & pk & customID & username & nickname & lang & timezone & v
-    url = PBURLWithAccountParams(url);
+    // 带上当前登录账号：data = base64({customID, avatar, lang, nickname, timezone,
+    //                                tiktok_id, version, timestamp, route, source})
+    NSString *buttonID = objc_getAssociatedObject(sender, &kPBButtonIDKey);
+    if (![buttonID isKindOfClass:[NSString class]]) buttonID = @"";
+    url = PBURLWithAccountParams(url, buttonID);
 
     PB_LOG(@"opening %@ from %@", url.absoluteString, NSStringFromClass([top class]));
 
@@ -1197,6 +1263,10 @@ static UIButton *PBMakeButton(NSDictionary *cfg) {
 
     NSURL *url = [urlString isKindOfClass:[NSString class]] ? [NSURL URLWithString:urlString] : nil;
     if (url) objc_setAssociatedObject(button, &kPBURLKey, url, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    NSString *bid = cfg[@"id"];
+    if (![bid isKindOfClass:[NSString class]]) bid = @"";
+    objc_setAssociatedObject(button, &kPBButtonIDKey, bid, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     [button addTarget:[PBButtonActionHandler shared]
                action:@selector(tapButton:)
