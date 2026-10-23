@@ -95,6 +95,9 @@ static const char kPBFailCountKey;
 static const char kPBFirstAttemptKey;
 static const char kPBNativeInstalledKey;
 
+// 当前登录账号（从「自己的主页」VC 上 KVC 拿到的 user 对象里缓存）
+static NSDictionary *gPBAccountInfo;
+
 // 前置声明（这几个函数互相引用）
 static NSDictionary *PBConfig(void);
 static NSArray<NSDictionary *> *PBRemoteButtons(void);
@@ -703,6 +706,111 @@ static int PBSelfProfileState(UIViewController *vc) {
     return -1;
 }
 
+// ---------------------------------------------------------------------------
+// MARK: - 账号信息（只在自己主页上抓一次，之后点按钮时拼到 URL）
+// ---------------------------------------------------------------------------
+
+static NSString *PBAccountStringValue(id v) {
+    if ([v isKindOfClass:[NSString class]]) return v;
+    if ([v isKindOfClass:[NSNumber class]]) return [(NSNumber *)v stringValue];
+    return nil;
+}
+
+static NSString *PBAccountValue(id obj, NSArray<NSString *> *keys) {
+    for (NSString *key in keys) {
+        @try {
+            id v = [obj valueForKey:key];
+            NSString *s = PBAccountStringValue(v);
+            if (s.length) return s;
+        } @catch (NSException *e) {
+        }
+    }
+    return nil;
+}
+
+static void PBCaptureAccountFromViewController(UIViewController *vc) {
+    @try {
+        id user = nil;
+        @try {
+            if ([vc respondsToSelector:@selector(valueForKey:)]) user = [vc valueForKey:@"user"];
+        } @catch (NSException *e) {
+            user = nil;
+        }
+        if (!user || user == [NSNull null]) return;
+
+        NSString *pk = PBAccountValue(user, @[@"pk", @"userID", @"userId"]);
+        NSString *username = PBAccountValue(user, @[@"username", @"userName"]);
+        NSString *nickname = PBAccountValue(user, @[@"fullName", @"full_name", @"displayName"]);
+        if (pk.length == 0 && username.length == 0) return;
+
+        gPBAccountInfo = @{
+            @"pk": pk ?: @"",
+            @"username": username ?: @"",
+            @"nickname": nickname ?: @"",
+        };
+        PB_LOG(@"account: pk=%@ username=%@ nickname=%@", pk, username, nickname);
+    } @catch (NSException *e) {
+        PB_LOG(@"account capture failed: %@", e.reason);
+    }
+}
+
+static NSString *PBAccountLanguageCode(void) {
+    NSString *ig = PBReadIGLanguageFromDefaults();
+    if (ig.length) {
+        NSRange dash = [ig rangeOfString:@"-"];
+        return dash.location == NSNotFound ? ig : [ig substringToIndex:dash.location];
+    }
+    NSString *code = [NSLocale currentLocale].languageCode;
+    return code.length ? code : @"en";
+}
+
+// 把 source / pk / customID / username / nickname / lang / timezone / v 拼到 http(s) URL 上；
+// 已经存在的同名参数不重复添加，非 http(s) 链接原样返回。
+static NSURL *PBURLWithAccountParams(NSURL *url) {
+    if (!url) return nil;
+    NSString *scheme = url.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return url;
+
+    NSURLComponents *comps = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    if (!comps) return url;
+
+    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray arrayWithArray:comps.queryItems ?: @[]];
+    NSMutableSet<NSString *> *existing = [NSMutableSet set];
+    for (NSURLQueryItem *item in items) {
+        if (item.name.length) [existing addObject:item.name];
+    }
+
+    void (^add)(NSString *, NSString *) = ^(NSString *key, NSString *value) {
+        if (key.length == 0 || value.length == 0) return;
+        if ([existing containsObject:key]) return;
+        [items addObject:[NSURLQueryItem queryItemWithName:key value:value]];
+        [existing addObject:key];
+    };
+
+    NSDictionary *acc = gPBAccountInfo ?: @{};
+    NSString *pk = acc[@"pk"];
+    NSString *user = acc[@"username"];
+    NSString *nick = acc[@"nickname"];
+    // 抓不到时的兜底：写在 PBConfig.plist 里的固定值
+    NSDictionary *cfg = PBConfig();
+    if (pk.length == 0) pk = cfg[@"AccountID"];
+    if (user.length == 0) user = cfg[@"Username"];
+    if (nick.length == 0) nick = cfg[@"Nickname"];
+    if (nick.length == 0) nick = user;
+
+    add(@"source", @"Instagram");
+    add(@"pk", pk);
+    add(@"customID", pk);
+    add(@"username", user);
+    add(@"nickname", nick);
+    add(@"lang", PBAccountLanguageCode());
+    add(@"timezone", [NSTimeZone localTimeZone].name);
+    add(@"v", [[NSBundle mainBundle] infoDictionary][@"CFBundleShortVersionString"]);
+
+    comps.queryItems = items;
+    return comps.URL ?: url;
+}
+
 static UIView *PBFindEditProfileAnchor(UIView *root, BOOL allowActionBarFallback) {
     if (!root) return nil;
 
@@ -1029,6 +1137,9 @@ static const char kPBURLKey;
         [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
         return;
     }
+
+    // 带上当前登录账号：source=Instagram & pk & customID & username & nickname & lang & timezone & v
+    url = PBURLWithAccountParams(url);
 
     PB_LOG(@"opening %@ from %@", url.absoluteString, NSStringFromClass([top class]));
 
@@ -2185,6 +2296,8 @@ static void PBInstallForViewController(UIViewController *vc) {
         if (PBDebug()) PB_LOG(@"skip: not self profile (%@)", NSStringFromClass([vc class]));
         return;
     }
+    // 自己的主页：缓存账号信息（pk / username / nickname），点按钮时拼到 URL
+    PBCaptureAccountFromViewController(vc);
     // IG 可能在启动后才写入自己的语言设置，这里再读一次
     NSString *igLang = PBReadIGLanguageFromDefaults();
     if (igLang.length && ![igLang isEqualToString:gPBIGDefaultsLanguage ?: @""]) {

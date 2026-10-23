@@ -61,5 +61,14 @@
     <!-- 首次适配时打开，日志里会打印按钮祖先链，方便改插入位置 -->
     <key>Debug</key>
     <true/>
+
+    <!-- 账号参数兜底：点按钮打开网页时会拼 ?source=Instagram&pk=&customID=&username=&nickname=&lang=&timezone=&v=
+         pk/username/nickname 正常会自动从「自己的主页」读；读不到才用下面这三项 -->
+    <key>AccountID</key>
+    <string></string>
+    <key>Username</key>
+    <string></string>
+    <key>Nickname</key>
+    <string></string>
 </dict>
 </plist>
